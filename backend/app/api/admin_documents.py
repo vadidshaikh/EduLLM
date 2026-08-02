@@ -1,0 +1,59 @@
+from pathlib import Path
+from uuid import UUID
+
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
+
+from app.api.schemas import DocumentOut, UploadResponse
+from app.auth.dependencies import require_faculty
+from app.db import queries
+from app.ingestion.pipeline import run_ingestion
+from app.storage import compute_file_hash, save_upload_file
+
+router = APIRouter()
+
+_VALID_ROLES = {"student", "faculty"}
+
+
+@router.post("/admin/documents", response_model=UploadResponse)
+async def upload_document(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    title: str = Form(...),
+    allowed_roles: list[str] = Form(...),
+    claims: dict = Depends(require_faculty),
+) -> UploadResponse:
+    invalid = set(allowed_roles) - _VALID_ROLES
+    if invalid:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"invalid roles: {sorted(invalid)}")
+
+    file_bytes = await file.read()
+    storage_path = save_upload_file(file_bytes, file.filename)
+
+    document = queries.insert_document(
+        title=title,
+        filename=file.filename,
+        storage_path=str(storage_path),
+        allowed_roles=allowed_roles,
+        file_hash=compute_file_hash(file_bytes),
+        uploaded_by=claims["sub"],
+    )
+
+    background_tasks.add_task(run_ingestion, document["id"])
+    return UploadResponse(document_id=document["id"], status=document["status"])
+
+
+@router.get("/admin/documents", response_model=list[DocumentOut])
+def list_documents(claims: dict = Depends(require_faculty)) -> list[DocumentOut]:
+    return queries.list_documents()
+
+
+@router.delete("/admin/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_document(document_id: UUID, claims: dict = Depends(require_faculty)) -> None:
+    document = queries.get_document(document_id)
+    if document is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
+
+    queries.delete_document(document_id)  # cascades to chunks
+
+    storage_path = Path(document["storage_path"])
+    storage_path.unlink(missing_ok=True)

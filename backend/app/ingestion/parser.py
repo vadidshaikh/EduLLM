@@ -1,0 +1,22 @@
+from pathlib import Path
+
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
+from docling.document_converter import DocumentConverter, PdfFormatOption
+
+_pdf_pipeline_options = PdfPipelineOptions(do_table_structure=True)
+_pdf_pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE
+_pdf_pipeline_options.table_structure_options.do_cell_matching = True
+
+_converter = DocumentConverter(
+    format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=_pdf_pipeline_options)}
+)
+
+
+def parse_to_markdown(path: Path) -> str:
+    """Parse a document (PDF, DOCX, PPTX, HTML, ...) to markdown text via
+    Docling. PDFs use accurate TableFormer table parsing; other formats use
+    Docling's format-specific defaults.
+    """
+    result = _converter.convert(str(path))
+    return result.document.export_to_markdown()
