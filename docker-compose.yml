@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: edullm
+      POSTGRES_PASSWORD: edullm
+      POSTGRES_DB: edullm
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5433:5432" # 5432 is already taken by a local system postgres service
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edullm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://edullm:edullm@postgres:5432/edullm
+    volumes:
+      - ./backend/storage:/app/storage
+    ports:
+      - "8000:8000"
+
+  admin-ui:
+    build: ./frontend
+    depends_on:
+      - backend
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    ports:
+      - "5173:5173"
+
+volumes:
+  pgdata:
