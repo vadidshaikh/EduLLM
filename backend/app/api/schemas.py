@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 
 class QueryRequest(BaseModel):
+    conversation_id: UUID | None = None
     query: str
 
 
@@ -15,9 +16,40 @@ class SourceOut(BaseModel):
 
 
 class QueryResponse(BaseModel):
+    conversation_id: UUID
     answer: str
     chart: dict[str, Any] | None
     sources: list[SourceOut]
+
+
+class ConversationOut(BaseModel):
+    id: UUID
+    title: str | None
+    updated_at: datetime
+
+
+class MessageOut(BaseModel):
+    role: str
+    content: str
+    chart_config: dict[str, Any] | None
+    sources: list[SourceOut] | None
+    created_at: datetime
+
+
+class LoginRequest(BaseModel):
+    email: str
+
+
+class LoginResponse(BaseModel):
+    detail: str
+
+
+class VerifyRequest(BaseModel):
+    token: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
 
 
 class DocumentOut(BaseModel):

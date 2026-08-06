@@ -1,3 +1,5 @@
+import datetime
+
 import jwt as pyjwt
 
 from app.config import settings
@@ -7,6 +9,17 @@ VALID_ROLES = {"student", "faculty"}
 
 class AuthError(Exception):
     """Raised for any invalid/expired/malformed token or unrecognized role."""
+
+
+def create_session_token(claims: dict, expiry_days: int) -> str:
+    """Issue Edu LLM's own session JWT after a magic link is verified. Same
+    signing key/algorithm as before — only the issuer changes from the old
+    external auth service to this one, so every downstream consumer of
+    verify_token() is unaffected.
+    """
+    now = datetime.datetime.now(tz=datetime.timezone.utc)
+    payload = {**claims, "iat": now, "exp": now + datetime.timedelta(days=expiry_days)}
+    return pyjwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
 def verify_token(token: str) -> dict:

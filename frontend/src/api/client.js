@@ -27,8 +27,28 @@ async function request(path, { method = "GET", token, body, isForm = false } = {
   return res.json();
 }
 
-export function queryLLM(token, query) {
-  return request("/query", { method: "POST", token, body: { query } });
+export function requestMagicLink(email) {
+  return request("/auth/login", { method: "POST", body: { email } });
+}
+
+export function verifyMagicLink(token) {
+  return request("/auth/verify", { method: "POST", body: { token } });
+}
+
+export function queryLLM(token, conversationId, query) {
+  return request("/query", { method: "POST", token, body: { conversation_id: conversationId, query } });
+}
+
+export function listConversations(token) {
+  return request("/conversations", { token });
+}
+
+export function getConversationMessages(token, conversationId) {
+  return request(`/conversations/${conversationId}/messages`, { token });
+}
+
+export function deleteConversation(token, conversationId) {
+  return request(`/conversations/${conversationId}`, { method: "DELETE", token });
 }
 
 export function listDocuments(token) {

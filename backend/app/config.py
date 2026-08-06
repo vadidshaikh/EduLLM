@@ -30,5 +30,18 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = 800
     TOP_K: int = 5
 
+    # Phase 2: email magic-link login. If SMTP_HOST is unset, the magic link
+    # is logged instead of emailed — zero-setup for local dev.
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = ""
+    SMTP_USE_TLS: bool = True
+
+    MAGIC_LINK_BASE_URL: str = "http://localhost:5173/auth/verify"
+    LOGIN_TOKEN_EXPIRY_MINUTES: int = 15
+    SESSION_JWT_EXPIRY_DAYS: int = 7
+
 
 settings = Settings()

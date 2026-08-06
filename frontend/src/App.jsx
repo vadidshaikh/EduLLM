@@ -1,6 +1,7 @@
 import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 import { useAuth } from "./auth/useAuth";
-import DevLoginPage from "./auth/DevLoginPage";
+import EmailLoginPage from "./auth/EmailLoginPage";
+import VerifyPage from "./auth/VerifyPage";
 import ChatPage from "./chat/ChatPage";
 import AdminPage from "./admin/AdminPage";
 import RoleBadge from "./chat/RoleBadge";
@@ -34,7 +35,8 @@ export default function App() {
       </header>
 
       <Routes>
-        <Route path="/login" element={<DevLoginPage auth={auth} />} />
+        <Route path="/login" element={<EmailLoginPage />} />
+        <Route path="/auth/verify" element={<VerifyPage auth={auth} />} />
         <Route
           path="/"
           element={

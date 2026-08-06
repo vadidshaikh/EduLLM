@@ -4,31 +4,37 @@ import re
 
 logger = logging.getLogger(__name__)
 
-_PATTERN = re.compile(r"\[GRAPH_CONFIG\](.*?)\[/GRAPH_CONFIG\]", re.DOTALL)
+_JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 _VALID_TYPES = {"bar", "line", "pie", "doughnut", "radar"}
 
 
-def parse_chart_config(raw_answer: str) -> tuple[str, dict | None]:
-    """Extract and strip a [GRAPH_CONFIG] block from the raw LLM answer.
+def parse_chart_json(raw: str) -> dict | None:
+    """Parse the dedicated generate_chart LLM call's output into a chart
+    config dict, or None if it's missing/malformed/invalid.
 
-    Returns (visible_text, chart_or_none). Any malformed or invalid block is
-    stripped and logged, degrading gracefully to a chart-less answer rather
-    than leaking raw block syntax into the UI.
+    The model is instructed to output only a JSON object, but this tolerates
+    stray surrounding text by falling back to extracting the first {...}
+    block before giving up.
     """
-    match = _PATTERN.search(raw_answer)
-    if not match:
-        return raw_answer.strip(), None
-
-    clean_text = _PATTERN.sub("", raw_answer).strip()
-
+    raw = raw.strip()
     try:
-        chart = json.loads(match.group(1).strip())
+        chart = json.loads(raw)
     except json.JSONDecodeError:
-        logger.warning("Malformed GRAPH_CONFIG block, dropping it")
-        return clean_text, None
+        match = _JSON_OBJECT_PATTERN.search(raw)
+        if not match:
+            logger.warning("No JSON object found in generate_chart output, dropping chart")
+            return None
+        try:
+            chart = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            logger.warning("Malformed JSON in generate_chart output, dropping chart")
+            return None
 
     if not isinstance(chart, dict) or chart.get("type") not in _VALID_TYPES:
-        logger.warning("Invalid GRAPH_CONFIG chart type %r, dropping it", chart.get("type") if isinstance(chart, dict) else chart)
-        return clean_text, None
+        logger.warning(
+            "Invalid chart type %r from generate_chart, dropping chart",
+            chart.get("type") if isinstance(chart, dict) else chart,
+        )
+        return None
 
-    return clean_text, chart
+    return chart

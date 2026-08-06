@@ -33,3 +33,37 @@ CREATE INDEX IF NOT EXISTS chunks_embedding_ivfflat_idx
 
 CREATE INDEX IF NOT EXISTS chunks_allowed_roles_gin_idx
     ON chunks USING GIN (allowed_roles);
+
+-- Phase 2: conversation memory, sidebar history, auto-titles. See
+-- edu-llm-phase2-changes.md section 1.
+CREATE TABLE IF NOT EXISTS conversations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_email TEXT NOT NULL,
+    title TEXT,                          -- null until auto-generated
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS conversations_user_email_updated_at_idx
+    ON conversations (user_email, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,                  -- 'user' | 'assistant'
+    content TEXT NOT NULL,
+    chart_config JSONB,                  -- null if no chart
+    sources JSONB,                       -- array of {title, doc_id}
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS messages_conversation_id_created_at_idx
+    ON messages (conversation_id, created_at);
+
+-- Phase 2: email magic-link login. See edu-llm-phase2-changes.md section 5.
+CREATE TABLE IF NOT EXISTS login_tokens (
+    token TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    used BOOLEAN DEFAULT FALSE
+);

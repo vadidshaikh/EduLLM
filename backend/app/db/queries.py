@@ -10,10 +10,12 @@ app/db/pool.py), so results here are dicts, not tuples.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
 from pgvector import Vector
+from psycopg.types.json import Json
 
 from app.db.pool import pool
 
@@ -142,3 +144,143 @@ def search_chunks(role: str, embedding: list[float], top_k: int) -> list[dict[st
             """,
             (role, Vector(embedding), top_k),
         ).fetchall()
+
+
+# --- Conversations & messages (Phase 2 conversation memory / sidebar) ---
+
+
+def create_conversation(user_email: str) -> dict[str, Any]:
+    with pool.connection() as conn:
+        row = conn.execute(
+            "INSERT INTO conversations (user_email) VALUES (%s) RETURNING *",
+            (user_email,),
+        ).fetchone()
+        conn.commit()
+        return row
+
+
+def get_conversation(conversation_id: UUID) -> dict[str, Any] | None:
+    with pool.connection() as conn:
+        return conn.execute(
+            "SELECT * FROM conversations WHERE id = %s", (conversation_id,)
+        ).fetchone()
+
+
+def list_conversations(user_email: str) -> list[dict[str, Any]]:
+    with pool.connection() as conn:
+        return conn.execute(
+            """
+            SELECT id, title, updated_at FROM conversations
+            WHERE user_email = %s
+            ORDER BY updated_at DESC
+            """,
+            (user_email,),
+        ).fetchall()
+
+
+def update_conversation_title(conversation_id: UUID, title: str) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "UPDATE conversations SET title = %s WHERE id = %s",
+            (title, conversation_id),
+        )
+        conn.commit()
+
+
+def touch_conversation(conversation_id: UUID) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "UPDATE conversations SET updated_at = now() WHERE id = %s",
+            (conversation_id,),
+        )
+        conn.commit()
+
+
+def delete_conversation(conversation_id: UUID) -> None:
+    with pool.connection() as conn:
+        conn.execute("DELETE FROM conversations WHERE id = %s", (conversation_id,))  # cascades to messages
+        conn.commit()
+
+
+def insert_message(
+    *,
+    conversation_id: UUID,
+    role: str,
+    content: str,
+    chart_config: dict[str, Any] | None = None,
+    sources: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            INSERT INTO messages (conversation_id, role, content, chart_config, sources)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING *
+            """,
+            (
+                conversation_id,
+                role,
+                content,
+                Json(chart_config) if chart_config is not None else None,
+                Json(sources) if sources is not None else None,
+            ),
+        ).fetchone()
+        conn.commit()
+        return row
+
+
+def get_messages(conversation_id: UUID) -> list[dict[str, Any]]:
+    with pool.connection() as conn:
+        return conn.execute(
+            """
+            SELECT role, content, chart_config, sources, created_at
+            FROM messages
+            WHERE conversation_id = %s
+            ORDER BY created_at ASC
+            """,
+            (conversation_id,),
+        ).fetchall()
+
+
+def get_recent_messages(conversation_id: UUID, limit: int) -> list[dict[str, Any]]:
+    """Last `limit` messages, oldest first — the window fed into condense_query
+    and generate_answer as conversation history.
+    """
+    with pool.connection() as conn:
+        return conn.execute(
+            """
+            SELECT role, content FROM (
+                SELECT role, content, created_at FROM messages
+                WHERE conversation_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+            ) recent
+            ORDER BY created_at ASC
+            """,
+            (conversation_id, limit),
+        ).fetchall()
+
+
+# --- Login tokens (Phase 2 email magic-link login) ---
+
+
+def insert_login_token(token: str, email: str, expires_at: datetime) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO login_tokens (token, email, expires_at) VALUES (%s, %s, %s)",
+            (token, email, expires_at),
+        )
+        conn.commit()
+
+
+def get_login_token(token: str) -> dict[str, Any] | None:
+    with pool.connection() as conn:
+        return conn.execute(
+            "SELECT * FROM login_tokens WHERE token = %s", (token,)
+        ).fetchone()
+
+
+def mark_login_token_used(token: str) -> None:
+    with pool.connection() as conn:
+        conn.execute("UPDATE login_tokens SET used = TRUE WHERE token = %s", (token,))
+        conn.commit()
