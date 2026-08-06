@@ -1,13 +1,30 @@
-:root {
+:root,
+:root[data-theme="dark"] {
   --bg: #1a1918;
   --surface: #242322;
   --surface-raised: #2c2b29;
   --border: #38362f;
   --text: #edeae4;
   --text-muted: #9c9890;
-  --accent: #c4703f;
-  --accent-muted: rgba(196, 112, 63, 0.16);
+  --accent: #1684ac;
+  --accent-muted: rgba(22, 132, 172, 0.18);
+  --accent-text: #edeae4;
   --danger: #c45a3f;
+  --success: #8fb996;
+}
+
+:root[data-theme="light"] {
+  --bg: #f7f5f1;
+  --surface: #ffffff;
+  --surface-raised: #eeece6;
+  --border: #ddd9d0;
+  --text: #211f1c;
+  --text-muted: #6b665d;
+  --accent: #1684ac;
+  --accent-muted: rgba(22, 132, 172, 0.12);
+  --accent-text: #ffffff;
+  --danger: #b3492f;
+  --success: #3f8a55;
 }
 
 * {
@@ -39,7 +56,7 @@ button {
 
 .btn {
   background: var(--accent);
-  color: #1a1918;
+  color: var(--accent-text);
   border: none;
   border-radius: 6px;
   padding: 0.55rem 1.1rem;
@@ -107,9 +124,20 @@ select.input {
   border-bottom: 1px solid var(--border);
 }
 
+.topbar-brand-clip {
+  height: 40px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+}
+
 .topbar-brand {
-  font-weight: 600;
-  letter-spacing: 0.01em;
+  /* Bump this height to "zoom" the logo — the fixed height/overflow on
+     .topbar-brand-clip keeps the navbar itself from growing. */
+  height: 59px;
+  width: auto;
+  display: block;
 }
 
 .topbar-nav {
@@ -128,6 +156,26 @@ select.input {
 .topbar-nav a.active,
 .topbar-nav a:hover {
   color: var(--text);
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.theme-toggle:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
 }
 
 .role-badge {
@@ -281,6 +329,60 @@ select.input {
   align-items: flex-start;
 }
 
+.welcome-heading {
+  margin: 0;
+  font-size: 1.7rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.welcome-name {
+  background: #1684ac;
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: welcome-shine 4s linear infinite;
+}
+
+.welcome-wave {
+  display: inline-block;
+  transform-origin: 70% 70%;
+  animation: welcome-wave 2.2s ease-in-out infinite;
+}
+
+@keyframes welcome-shine {
+  to {
+    background-position: 200% center;
+  }
+}
+
+@keyframes welcome-wave {
+  0%,
+  60%,
+  100% {
+    transform: rotate(0deg);
+  }
+  10% {
+    transform: rotate(14deg);
+  }
+  20% {
+    transform: rotate(-8deg);
+  }
+  30% {
+    transform: rotate(14deg);
+  }
+  40% {
+    transform: rotate(-4deg);
+  }
+  50% {
+    transform: rotate(10deg);
+  }
+}
+
 .query-form {
   display: flex;
   gap: 0.6rem;
@@ -431,7 +533,7 @@ table.documents-table td {
 }
 
 .pill.status-indexed {
-  color: #8fb996;
+  color: var(--success);
 }
 
 .pill.status-failed {

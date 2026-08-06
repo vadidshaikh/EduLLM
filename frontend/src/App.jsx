@@ -1,5 +1,6 @@
 import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 import { useAuth } from "./auth/useAuth";
+import { useTheme } from "./ThemeContext";
 import EmailLoginPage from "./auth/EmailLoginPage";
 import VerifyPage from "./auth/VerifyPage";
 import ChatPage from "./chat/ChatPage";
@@ -13,11 +14,14 @@ function RequireAuth({ auth, children }) {
 
 export default function App() {
   const auth = useAuth();
+  const { theme, toggleTheme } = useTheme();
 
   return (
     <div className="app-shell">
       <header className="topbar">
-        <span className="topbar-brand">Edu LLM</span>
+        <div className="topbar-brand-clip">
+          <img src="/image-nobg.png" alt="Edu LLM" className="topbar-brand" />
+        </div>
         <nav className="topbar-nav">
           {auth.isAuthenticated && (
             <>
@@ -31,6 +35,15 @@ export default function App() {
               </button>
             </>
           )}
+          <button
+            type="button"
+            className="theme-toggle"
+            onClick={toggleTheme}
+            title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+            aria-label="Toggle color theme"
+          >
+            {theme === "dark" ? "☀" : "☾"}
+          </button>
         </nav>
       </header>
 

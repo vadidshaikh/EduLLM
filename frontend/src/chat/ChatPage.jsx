@@ -118,8 +118,9 @@ export default function ChatPage({ auth }) {
       <div className="page">
         <div className="chat-container">
           <div className="chat-header">
-            <RoleBadge role={auth.role} />
-            <h1 style={{ margin: 0, fontSize: "1.3rem" }}>Ask about your institute's documents</h1>
+            <h1 className="welcome-heading">
+              <span className="welcome-wave">W</span>elcome, <span className="welcome-name">Brochacho!!</span>
+            </h1>
           </div>
 
           <div className="messages-list">
