@@ -1,0 +1,29 @@
+/* Styles for only the document file input in UploadForm */
+.file-input {
+  display: block;
+  padding: 5px 5px;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #727374;
+}
+
+.file-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
+/* Style the select button for modern browsers */
+.file-input::-webkit-file-upload-button {
+  background: #1684ac;
+  border: none;
+  cursor: pointer;
+}
+
+.file-input::file-selector-button {
+  background: #1684ac;
+  color: white;
+  border: none;
+  padding: 5px 5px;
+  border-radius: 6px;
+  cursor: pointer;
+}

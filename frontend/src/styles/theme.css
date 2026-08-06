@@ -83,7 +83,7 @@ button {
 .input,
 select.input {
   width: 100%;
-  height: 22px;
+  height: 39px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 6px;

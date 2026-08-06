@@ -1,4 +1,5 @@
 import { useState } from "react";
+import "./UploadFormFile.css";
 
 const ROLES = ["student", "faculty"];
 
@@ -30,7 +31,7 @@ export default function UploadForm({ onUpload, uploading, error }) {
         onChange={(e) => setTitle(e.target.value)}
       />
       <input
-        className="input"
+        className="input file-input"
         type="file"
         onChange={(e) => setFile(e.target.files?.[0] ?? null)}
       />
