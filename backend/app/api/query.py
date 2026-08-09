@@ -13,6 +13,10 @@ router = APIRouter()
 def query(
     body: QueryRequest, background_tasks: BackgroundTasks, claims: dict = Depends(get_claims)
 ) -> QueryResponse:
+    """Answers a user's question: runs it through the RAG pipeline to get an
+    answer (with sources and an optional chart), creating a new conversation
+    if needed and generating a title for it in the background.
+    """
     is_new_conversation = body.conversation_id is None
     conversation_id = body.conversation_id or create_conversation(user_email=claims["sub"])["id"]
 

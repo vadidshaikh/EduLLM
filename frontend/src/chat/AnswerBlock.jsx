@@ -1,6 +1,9 @@
 import SourceTag from "./SourceTag";
 import ChartBlock from "./ChartBlock";
 
+/**
+ * Shows one AI answer, including its text, any chart, and the list of source documents it was based on.
+ */
 export default function AnswerBlock({ message }) {
   return (
     <div className="answer-block">

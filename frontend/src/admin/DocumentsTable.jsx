@@ -1,3 +1,6 @@
+/**
+ * Shows a table of uploaded documents with their roles, status, version and upload date, plus a delete button for each.
+ */
 export default function DocumentsTable({ documents, onDelete }) {
   if (documents.length === 0) {
     return <p className="status-line">No documents uploaded yet.</p>;

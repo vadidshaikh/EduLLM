@@ -221,6 +221,7 @@ chatbot = graph.compile(checkpointer=checkpointer)
 # 8. Helpers
 # -------------------
 def retrieve_all_threads():
+    """List the unique ids of every chat conversation saved so far."""
     all_threads = set()
     for checkpoint in checkpointer.list(None):
         all_threads.add(checkpoint.config["configurable"]["thread_id"])
@@ -228,8 +229,10 @@ def retrieve_all_threads():
 
 
 def thread_has_document(thread_id: str) -> bool:
+    """Check whether a PDF has already been uploaded and indexed for this chat thread."""
     return str(thread_id) in _THREAD_RETRIEVERS
 
 
 def thread_document_metadata(thread_id: str) -> dict:
+    """Look up the stored info (filename, page and chunk counts) for the PDF uploaded to this chat thread."""
     return _THREAD_METADATA.get(str(thread_id), {})

@@ -16,5 +16,6 @@ title_graph = _title_graph.compile()
 
 
 def run_title_generation(conversation_id: str, first_question: str, first_answer: str) -> None:
+    """Generates a short title for a conversation from its first question and answer, then saves it to the database."""
     result = title_graph.invoke({"first_question": first_question, "first_answer": first_answer})
     update_conversation_title(conversation_id, result["title"])

@@ -17,14 +17,17 @@ from app.rag.state import RAGState
 
 
 def _route_after_history(state: RAGState) -> str:
+    """Decides whether to rewrite the question using conversation history, or skip straight to searching documents."""
     return "condense_query" if state.get("history") else "retrieve_filtered"
 
 
 def _route_after_should_chart(state: RAGState) -> str:
+    """Decides whether to generate a chart for the answer or go straight to sending the response."""
     return "generate_chart" if state.get("should_chart") else "respond"
 
 
 def build_graph():
+    """Wires together all the pipeline steps (verify login, find role, search documents, answer, maybe chart, respond, save) into the question-answering flow."""
     g = StateGraph(RAGState)
     g.add_node("verify_token", verify_token_node)
     g.add_node("resolve_role", resolve_role_node)

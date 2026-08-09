@@ -27,6 +27,9 @@ ChartJS.register(
 
 const CHART_COMPONENTS = { bar: Bar, line: Line, pie: Pie, doughnut: Doughnut, radar: Radar };
 
+/**
+ * Shows a bar, line, pie, doughnut or radar chart based on the chart data provided, matching the current light/dark theme.
+ */
 export default function ChartBlock({ chart }) {
   const { theme } = useTheme();
   const Component = CHART_COMPONENTS[chart.type];

@@ -3,15 +3,24 @@ import "./UploadFormFile.css";
 
 const ROLES = ["student", "faculty"];
 
+/**
+ * Shows a form for picking a file, typing a title, and choosing which roles can see it, then uploading it.
+ */
 export default function UploadForm({ onUpload, uploading, error }) {
   const [file, setFile] = useState(null);
   const [title, setTitle] = useState("");
   const [roles, setRoles] = useState(["student", "faculty"]);
 
+  /**
+   * Adds or removes a role from the selected roles list when its checkbox is clicked.
+   */
   function toggleRole(role) {
     setRoles((prev) => (prev.includes(role) ? prev.filter((r) => r !== role) : [...prev, role]));
   }
 
+  /**
+   * Sends the selected file, title and roles to be uploaded when the form is submitted, then clears the form.
+   */
   async function handleSubmit(e) {
     e.preventDefault();
     if (!file || !title.trim() || roles.length === 0) return;

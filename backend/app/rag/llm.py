@@ -9,6 +9,7 @@ def call_llm(
     model: str | None = None,
     temperature: float | None = None,
 ) -> str:
+    """Sends a conversation to the configured AI language model and returns its text reply."""
     kwargs = {}
     if temperature is not None:
         kwargs["temperature"] = temperature

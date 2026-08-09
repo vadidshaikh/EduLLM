@@ -22,6 +22,10 @@ async def upload_document(
     allowed_roles: list[str] = Form(...),
     claims: dict = Depends(require_faculty),
 ) -> UploadResponse:
+    """Lets a faculty member upload a new document, saves the file to storage,
+    records it in the database, and kicks off background processing so it can
+    be searched later.
+    """
     invalid = set(allowed_roles) - _VALID_ROLES
     if invalid:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"invalid roles: {sorted(invalid)}")
@@ -44,11 +48,15 @@ async def upload_document(
 
 @router.get("/admin/documents", response_model=list[DocumentOut])
 def list_documents(claims: dict = Depends(require_faculty)) -> list[DocumentOut]:
+    """Returns the list of all uploaded documents, for faculty only."""
     return queries.list_documents()
 
 
 @router.delete("/admin/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_document(document_id: UUID, claims: dict = Depends(require_faculty)) -> None:
+    """Lets a faculty member permanently remove a document, deleting its
+    database record and its file on disk.
+    """
     document = queries.get_document(document_id)
     if document is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")

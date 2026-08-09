@@ -1,12 +1,18 @@
 import { useState } from "react";
 import { requestMagicLink, ApiError } from "../api/client";
 
+/**
+ * Shows a form to enter an email address and request a sign-in link, then a confirmation message once it's sent.
+ */
 export default function EmailLoginPage() {
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
 
+  /**
+   * Sends the entered email to the server to request a sign-in link and shows a confirmation or error message.
+   */
   async function handleSubmit(e) {
     e.preventDefault();
     if (!email.trim() || sending) return;

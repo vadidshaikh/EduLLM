@@ -7,6 +7,7 @@ from app.config import settings
 
 
 def _configure(conn: Connection) -> None:
+    """Sets up a new database connection so it understands vector data (used for similarity search)."""
     register_vector(conn)
 
 

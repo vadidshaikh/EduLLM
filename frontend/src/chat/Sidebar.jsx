@@ -1,5 +1,9 @@
 import { useState } from "react";
 
+/**
+ * Turns a date into a friendly relative description like "just now" or "3 hours ago".
+ * Example: relativeTime(oneMinuteAgo) -> "1 minute ago"
+ */
 function relativeTime(dateStr) {
   const diffSec = Math.round((Date.now() - new Date(dateStr).getTime()) / 1000);
   if (diffSec < 60) return "just now";
@@ -12,6 +16,9 @@ function relativeTime(dateStr) {
   return new Date(dateStr).toLocaleDateString();
 }
 
+/**
+ * Shows the list of past conversations with buttons to start a new chat, select, delete, or collapse/expand the sidebar.
+ */
 export default function Sidebar({ conversations, activeConversationId, onSelect, onNewChat, onDelete }) {
   const [collapsed, setCollapsed] = useState(false);
 

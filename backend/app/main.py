@@ -18,6 +18,7 @@ logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Opens the database connection pool when the app starts up and closes it when the app shuts down."""
     pool.open()
     yield
     pool.close()
@@ -40,4 +41,5 @@ app.include_router(conversations_router)
 
 @app.get("/health")
 def health() -> dict:
+    """A simple check endpoint that reports the server is up and running."""
     return {"status": "ok"}

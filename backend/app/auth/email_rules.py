@@ -18,6 +18,13 @@ class EmailFormatError(Exception):
 
 
 def parse_institute_email(email: str) -> dict:
+    """Reads an @scet.ac.in email address and figures out whether it belongs
+    to a faculty member or a student, pulling out the student's department,
+    year, division, and section when it's a student address.
+
+    Example: parse_institute_email("jane.co23d1@scet.ac.in") ->
+    {"role": "student", "dept": "co", "year": "23", "division": "d", "section": "1"}
+    """
     normalized = email.strip().lower()
     if not normalized.endswith(_DOMAIN):
         raise EmailFormatError("email must be an @scet.ac.in address")

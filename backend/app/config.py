@@ -30,14 +30,13 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = 800
     TOP_K: int = 5
 
-    # Phase 2: email magic-link login. If SMTP_HOST is unset, the magic link
-    # is logged instead of emailed — zero-setup for local dev.
-    SMTP_HOST: str = ""
-    SMTP_PORT: int = 587
-    SMTP_USER: str = ""
-    SMTP_PASSWORD: str = ""
-    SMTP_FROM: str = ""
-    SMTP_USE_TLS: bool = True
+    # Phase 2: email magic-link login, sent via Mailjet's HTTP API. If
+    # MAILJET_API_KEY is unset, the magic link is logged instead of emailed —
+    # zero-setup for local dev.
+    MAILJET_API_KEY: str = ""
+    MAILJET_API_SECRET: str = ""
+    MAILJET_FROM_EMAIL: str = ""
+    MAILJET_FROM_NAME: str = "Edu LLM"
 
     MAGIC_LINK_BASE_URL: str = "http://localhost:5173/auth/verify"
     LOGIN_TOKEN_EXPIRY_MINUTES: int = 15

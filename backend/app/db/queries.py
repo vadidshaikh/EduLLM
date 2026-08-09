@@ -74,22 +74,26 @@ def insert_document(
 
 
 def list_documents() -> list[dict[str, Any]]:
+    """Fetches every uploaded document, newest first."""
     with pool.connection() as conn:
         return conn.execute("SELECT * FROM documents ORDER BY uploaded_at DESC").fetchall()
 
 
 def get_document(document_id: UUID) -> dict[str, Any] | None:
+    """Looks up a single document's details by its ID."""
     with pool.connection() as conn:
         return conn.execute("SELECT * FROM documents WHERE id = %s", (document_id,)).fetchone()
 
 
 def delete_document(document_id: UUID) -> None:
+    """Permanently removes a document record from the database."""
     with pool.connection() as conn:
         conn.execute("DELETE FROM documents WHERE id = %s", (document_id,))
         conn.commit()
 
 
 def update_document_status(document_id: UUID, status: str) -> None:
+    """Updates a document's processing status (e.g. queued, processing, indexed, failed)."""
     with pool.connection() as conn:
         conn.execute(
             "UPDATE documents SET status = %s, updated_at = now() WHERE id = %s",
@@ -150,6 +154,7 @@ def search_chunks(role: str, embedding: list[float], top_k: int) -> list[dict[st
 
 
 def create_conversation(user_email: str) -> dict[str, Any]:
+    """Starts a new chat conversation record for a given user."""
     with pool.connection() as conn:
         row = conn.execute(
             "INSERT INTO conversations (user_email) VALUES (%s) RETURNING *",
@@ -160,6 +165,7 @@ def create_conversation(user_email: str) -> dict[str, Any]:
 
 
 def get_conversation(conversation_id: UUID) -> dict[str, Any] | None:
+    """Looks up a single conversation's details by its ID."""
     with pool.connection() as conn:
         return conn.execute(
             "SELECT * FROM conversations WHERE id = %s", (conversation_id,)
@@ -167,6 +173,7 @@ def get_conversation(conversation_id: UUID) -> dict[str, Any] | None:
 
 
 def list_conversations(user_email: str) -> list[dict[str, Any]]:
+    """Fetches all of a user's conversations for display in the sidebar, most recently updated first."""
     with pool.connection() as conn:
         return conn.execute(
             """
@@ -179,6 +186,7 @@ def list_conversations(user_email: str) -> list[dict[str, Any]]:
 
 
 def update_conversation_title(conversation_id: UUID, title: str) -> None:
+    """Saves an auto-generated title for a conversation."""
     with pool.connection() as conn:
         conn.execute(
             "UPDATE conversations SET title = %s WHERE id = %s",
@@ -188,6 +196,7 @@ def update_conversation_title(conversation_id: UUID, title: str) -> None:
 
 
 def touch_conversation(conversation_id: UUID) -> None:
+    """Marks a conversation as just updated, so it moves to the top of the recent list."""
     with pool.connection() as conn:
         conn.execute(
             "UPDATE conversations SET updated_at = now() WHERE id = %s",
@@ -197,6 +206,7 @@ def touch_conversation(conversation_id: UUID) -> None:
 
 
 def delete_conversation(conversation_id: UUID) -> None:
+    """Permanently removes a conversation and, via cascade, all of its messages."""
     with pool.connection() as conn:
         conn.execute("DELETE FROM conversations WHERE id = %s", (conversation_id,))  # cascades to messages
         conn.commit()
@@ -210,6 +220,7 @@ def insert_message(
     chart_config: dict[str, Any] | None = None,
     sources: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """Saves one chat message (from the user or the assistant) into a conversation."""
     with pool.connection() as conn:
         row = conn.execute(
             """
@@ -230,6 +241,7 @@ def insert_message(
 
 
 def get_messages(conversation_id: UUID) -> list[dict[str, Any]]:
+    """Fetches all messages in a conversation, in the order they were sent."""
     with pool.connection() as conn:
         return conn.execute(
             """
@@ -265,6 +277,7 @@ def get_recent_messages(conversation_id: UUID, limit: int) -> list[dict[str, Any
 
 
 def insert_login_token(token: str, email: str, expires_at: datetime) -> None:
+    """Stores a one-time magic-link login token for an email address."""
     with pool.connection() as conn:
         conn.execute(
             "INSERT INTO login_tokens (token, email, expires_at) VALUES (%s, %s, %s)",
@@ -274,6 +287,7 @@ def insert_login_token(token: str, email: str, expires_at: datetime) -> None:
 
 
 def get_login_token(token: str) -> dict[str, Any] | None:
+    """Looks up a magic-link login token's details so it can be checked for validity."""
     with pool.connection() as conn:
         return conn.execute(
             "SELECT * FROM login_tokens WHERE token = %s", (token,)
@@ -281,6 +295,7 @@ def get_login_token(token: str) -> dict[str, Any] | None:
 
 
 def mark_login_token_used(token: str) -> None:
+    """Flags a magic-link login token as already used, so it can't be replayed."""
     with pool.connection() as conn:
         conn.execute("UPDATE login_tokens SET used = TRUE WHERE token = %s", (token,))
         conn.commit()

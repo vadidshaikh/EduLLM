@@ -24,10 +24,12 @@ _NUMBER_PATTERN = re.compile(r"-?\d[\d,]*\.?\d*")
 
 
 def _format_history(history: list[dict]) -> str:
+    """Turns a list of past chat messages into one readable block of text, like a transcript."""
     return "\n".join(f"{m['role'].capitalize()}: {m['content']}" for m in history)
 
 
 def _context_text(state: RAGState) -> str:
+    """Joins all the retrieved document chunks into one big block of text to feed to the AI model."""
     return "\n\n---\n\n".join(c["chunk_text"] for c in state["retrieved_chunks"])
 
 
@@ -43,6 +45,7 @@ def verify_token_node(state: RAGState) -> dict:
 
 
 def resolve_role_node(state: RAGState) -> dict:
+    """Checks that the user's role (student or faculty) is present and valid, since it controls which documents they can see."""
     role = state.get("role")
     if role not in VALID_ROLES:
         raise ValueError(f"missing or invalid role in graph state: {role!r}")
@@ -50,6 +53,7 @@ def resolve_role_node(state: RAGState) -> dict:
 
 
 def load_history_node(state: RAGState) -> dict:
+    """Fetches the recent messages from this conversation so far, to give the assistant context about earlier turns."""
     conversation_id = state.get("conversation_id")
     if not conversation_id:
         return {"history": []}
@@ -75,6 +79,7 @@ def condense_query_node(state: RAGState) -> dict:
 
 
 def retrieve_filtered_node(state: RAGState) -> dict:
+    """Looks up the document chunks most relevant to the user's question, only returning ones the user's role is allowed to see."""
     search_query = state.get("condensed_query") or state["query"]
     query_embedding = embed_texts([search_query])[0]
     chunks = search_chunks(role=state["role"], embedding=query_embedding, top_k=settings.TOP_K)
@@ -82,6 +87,7 @@ def retrieve_filtered_node(state: RAGState) -> dict:
 
 
 def generate_answer_node(state: RAGState) -> dict:
+    """Asks the AI model to write an answer to the user's question using only the retrieved document chunks (and recent chat history) as its source material."""
     context = _context_text(state)
     question = state.get("condensed_query") or state["query"]
 
@@ -96,6 +102,7 @@ def generate_answer_node(state: RAGState) -> dict:
 
 
 def should_chart_node(state: RAGState) -> dict:
+    """Asks the AI model to judge whether this question and answer would benefit from being shown as a chart."""
     messages = [
         {"role": "system", "content": SHOULD_CHART_PROMPT},
         {
@@ -121,6 +128,10 @@ def generate_chart_node(state: RAGState) -> dict:
 
 
 def _numbers_in(text: str) -> set[float]:
+    """Pulls out every number that appears in a piece of text, so it can be compared elsewhere.
+
+    Example: _numbers_in("Sales grew 12.5% to 1,200 units") -> {12.5, 1200.0}
+    """
     numbers = set()
     for match in _NUMBER_PATTERN.findall(text):
         try:
@@ -158,6 +169,7 @@ def validate_chart_data_node(state: RAGState) -> dict:
 
 
 def respond_node(state: RAGState) -> dict:
+    """Builds the final list of unique source documents to show the user, alongside whatever chart (if any) was generated."""
     seen: set[str] = set()
     sources = []
     for chunk in state["retrieved_chunks"]:
@@ -171,6 +183,7 @@ def respond_node(state: RAGState) -> dict:
 
 
 def save_messages_node(state: RAGState) -> dict:
+    """Saves the user's question and the assistant's answer to the conversation history in the database."""
     conversation_id = state["conversation_id"]
     insert_message(conversation_id=conversation_id, role="user", content=state["query"])
     insert_message(

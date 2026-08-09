@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { verifyMagicLink, ApiError } from "../api/client";
 
+/**
+ * Shows a "signing you in" message while it checks the sign-in link's token, then redirects to the chat page on success or shows an error.
+ */
 export default function VerifyPage({ auth }) {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();

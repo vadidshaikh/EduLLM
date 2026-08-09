@@ -7,11 +7,17 @@ import ChatPage from "./chat/ChatPage";
 import AdminPage from "./admin/AdminPage";
 import RoleBadge from "./chat/RoleBadge";
 
+/**
+ * Shows the wrapped page only if the user is signed in, otherwise sends them to the login page.
+ */
 function RequireAuth({ auth, children }) {
   if (!auth.isAuthenticated) return <Navigate to="/login" replace />;
   return children;
 }
 
+/**
+ * Shows the top navigation bar and switches between the login, verify, chat and admin pages based on the current route.
+ */
 export default function App() {
   const auth = useAuth();
   const { theme, toggleTheme } = useTheme();

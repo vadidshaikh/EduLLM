@@ -18,6 +18,7 @@ def get_claims(authorization: str = Header(default="")) -> dict:
 
 
 def require_faculty(claims: dict = Depends(get_claims)) -> dict:
+    """Blocks access to a route unless the logged-in user's role is faculty."""
     if claims["role"] != "faculty":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "faculty access required")
     return claims

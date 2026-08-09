@@ -16,6 +16,7 @@ SCHEMA_PATH = Path(__file__).resolve().parent.parent / "db" / "schema.sql"
 
 
 def main() -> None:
+    """Load the database schema file and apply it to the configured database, creating any missing tables."""
     sql = SCHEMA_PATH.read_text()
     with psycopg.connect(settings.DATABASE_URL, autocommit=True) as conn:
         conn.execute(sql)

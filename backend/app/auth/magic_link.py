@@ -6,6 +6,9 @@ from app.db.queries import get_login_token, insert_login_token, mark_login_token
 
 
 def generate_login_token(email: str, expiry_minutes: int) -> str:
+    """Creates a random one-time login token for an email address, saves it
+    with an expiry time, and returns it so it can be put into a magic link.
+    """
     token = secrets.token_urlsafe(32)
     expires_at = datetime.now(tz=timezone.utc) + timedelta(minutes=expiry_minutes)
     insert_login_token(token, email, expires_at)

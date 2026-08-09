@@ -12,6 +12,9 @@ router = APIRouter()
 
 @router.post("/auth/login", response_model=LoginResponse)
 def request_login(body: LoginRequest) -> LoginResponse:
+    """Handles a user's request to sign in: checks the email looks like a
+    valid institute address, then emails them a one-time sign-in link.
+    """
     try:
         parse_institute_email(body.email)
     except EmailFormatError as exc:
@@ -27,6 +30,9 @@ def request_login(body: LoginRequest) -> LoginResponse:
 
 @router.post("/auth/verify", response_model=TokenResponse)
 def verify_login(body: VerifyRequest) -> TokenResponse:
+    """Exchanges a magic-link token for a proper login session, returning an
+    access token the user's browser can use for future requests.
+    """
     try:
         email = consume_login_token(body.token)
     except AuthError as exc:

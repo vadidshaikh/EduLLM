@@ -20,7 +20,7 @@ cp .env.example .env
 
 Edit `.env` if you need to:
 - `HF_TOKEN` — your HuggingFace API token (for embeddings and LLM)
-- `SMTP_HOST` — leave blank for dev (magic links print to console); set to send real emails
+- `MAILJET_API_KEY` — leave blank for dev (magic links print to console); set to send real emails via Mailjet
 - `DATABASE_URL` — default assumes Docker Postgres on port 5433; change if using a different setup
 - `JWT_SECRET` — already has a dev key; generate a new one for production:
   ```bash
@@ -87,11 +87,11 @@ The app now uses email-based login. You don't need to mint tokens manually anymo
 2. Enter an email like:
    - `firstname.lastname@scet.ac.in` (faculty)
    - `name.co23d1@scet.ac.in` (student)
-3. Check the **backend console** for the magic link (since SMTP isn't configured locally)
+3. Check the **backend console** for the magic link (since Mailjet isn't configured locally)
 4. Click the link to sign in
 
 ### In production:
-1. Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` in `.env`
+1. Set `MAILJET_API_KEY`, `MAILJET_API_SECRET`, `MAILJET_FROM_EMAIL` in `.env`
 2. Users receive emails with sign-in links
 
 ---

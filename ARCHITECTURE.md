@@ -135,7 +135,7 @@ This avoids hardcoding department codes and works across SCET's many departments
 1. **POST /auth/login** with email
 2. Backend validates domain, derives role/dept
 3. Generates a 15-minute `login_token` (single-use, in DB)
-4. Sends magic link (or logs it if SMTP not configured)
+4. Sends magic link via Mailjet (or logs it if Mailjet not configured)
 5. User clicks link → **POST /auth/verify** with token
 6. Backend marks token used, re-derives role, issues session JWT
 7. JWT includes: `sub`, `role`, `dept`, `year`, `division`, `exp`
@@ -224,7 +224,7 @@ backend/
       email_rules.py       Institute email format parsing + role derivation
       jwt.py               JWT creation/verification
       magic_link.py        Magic-link token generation/validation
-      mailer.py            SMTP sender (or console logger for dev)
+      mailer.py            Mailjet API sender (or console logger for dev)
       dependencies.py      FastAPI auth guards (@Depends)
     ingestion/
       parser.py            Docling (PDF/docx/md parser)
@@ -312,7 +312,7 @@ plan.md                    Original Phase 1 architecture spec
 ## Deployment Notes
 
 For production:
-1. **Set real `JWT_SECRET`, `SMTP_*` env vars** in `.env` or secrets manager
+1. **Set real `JWT_SECRET`, `MAILJET_*` env vars** in `.env` or secrets manager
 2. **Use a real LLM provider** (OpenAI, Anthropic, etc.) — set `LLM_MODEL` in `.env`
 3. **Configure Postgres** (hosted Postgres or managed DB)
 4. **Use a real storage backend** instead of local `/backend/storage` (S3, GCS, etc.)

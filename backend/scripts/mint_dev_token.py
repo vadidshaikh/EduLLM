@@ -16,6 +16,10 @@ from app.config import settings  # noqa: E402
 
 
 def mint(sub: str, role: str, minutes: int = 120) -> str:
+    """Create a signed login token (JWT) for a given user and role that expires after a set number of minutes.
+
+    Example: mint("student1@college.edu", "student", 120) -> "<encoded JWT string>"
+    """
     now = datetime.datetime.now(tz=datetime.timezone.utc)
     payload = {
         "sub": sub,

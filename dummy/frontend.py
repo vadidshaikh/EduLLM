@@ -13,10 +13,12 @@ from dummy.backend import (
 
 # =========================== Utilities ===========================
 def generate_thread_id():
+    """Create a brand-new random id to identify a chat conversation."""
     return uuid.uuid4()
 
 
 def reset_chat():
+    """Start a fresh, empty conversation with a new thread id and clear the on-screen chat history."""
     thread_id = generate_thread_id()
     st.session_state["thread_id"] = thread_id
     add_thread(thread_id)
@@ -24,11 +26,16 @@ def reset_chat():
 
 
 def add_thread(thread_id):
+    """Remember a conversation's id in the sidebar list if it isn't already there."""
     if thread_id not in st.session_state["chat_threads"]:
         st.session_state["chat_threads"].append(thread_id)
 
 
 def load_conversation(thread_id):
+    """Fetch the saved messages for a given past conversation so they can be shown again.
+
+    Example: load_conversation("abc-123") -> [HumanMessage(...), AIMessage(...), ...]
+    """
     state = chatbot.get_state(config={"configurable": {"thread_id": thread_id}})
     return state.values.get("messages", [])
 
@@ -117,6 +124,7 @@ if user_input:
         status_holder = {"box": None}
 
         def ai_only_stream():
+            """Play back the assistant's reply piece by piece as it's generated, showing a status message whenever a tool is being used."""
             for message_chunk, _ in chatbot.stream(
                 {"messages": [HumanMessage(content=user_input)]},
                 config=CONFIG,

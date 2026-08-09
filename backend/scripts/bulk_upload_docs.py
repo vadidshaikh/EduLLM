@@ -33,6 +33,7 @@ from app.storage import compute_file_hash
 
 
 def main() -> None:
+    """Read every PDF from the docs/ folder and upload each one into the database, optionally previewing first with --dry-run."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--roles",

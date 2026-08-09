@@ -186,7 +186,7 @@ CREATE TABLE login_tokens (
 ## 6. Manual Action Items for This Phase
 
 - [ ] Confirm the second-segment student pattern (`co23d1`-style) against a real sample of SCET student emails across a few departments — the derivation logic assumes "digits in second segment = student" and doesn't hardcode department codes, but worth sanity-checking against edge cases (e.g. hyphenated names, faculty with a middle initial)
-- [ ] Set up an email-sending service (SMTP creds, or SendGrid/AWS SES) for the magic link — decide which now
+- [x] Set up an email-sending service for the magic link — using Mailjet's HTTP API (`MAILJET_API_KEY`/`MAILJET_API_SECRET`/`MAILJET_FROM_EMAIL` in `.env`)
 - [ ] Decide magic-link expiry window (recommended default: 15 minutes) and session JWT lifetime (recommended default: 7 days, since students will use this repeatedly)
 - [ ] Confirm whether the previously-planned separate auth service is still being built for anything else, or whether Edu LLM's own login fully replaces that plan
 
