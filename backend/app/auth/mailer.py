@@ -6,16 +6,16 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-MAILJET_SEND_URL = "https://api.mailjet.com/v3.1/send"
+RESEND_SEND_URL = "https://api.resend.com/emails"
 
 
 def send_magic_link(to_email: str, link: str) -> None:
-    """Send the magic-link login email via Mailjet's API. If Mailjet isn't
-    configured (MAILJET_API_KEY unset), log the link instead — lets local
+    """Send the magic-link login email via Resend's API. If Resend isn't
+    configured (RESEND_API_KEY unset), log the link instead — lets local
     dev work with zero email setup.
     """
-    if not settings.MAILJET_API_KEY:
-        logger.info("Mailjet not configured; magic link for %s: %s", to_email, link)
+    if not settings.RESEND_API_KEY:
+        logger.info("Resend not configured; magic link for %s: %s", to_email, link)
         return
 
     text_body = (
@@ -31,23 +31,16 @@ def send_magic_link(to_email: str, link: str) -> None:
     )
 
     payload = {
-        "Messages": [
-            {
-                "From": {
-                    "Email": settings.MAILJET_FROM_EMAIL,
-                    "Name": settings.MAILJET_FROM_NAME,
-                },
-                "To": [{"Email": to_email}],
-                "Subject": "Sign in to Edu LLM",
-                "TextPart": text_body,
-                "HTMLPart": html_body,
-            }
-        ]
+        "from": f"{settings.RESEND_FROM_NAME} <{settings.RESEND_FROM_EMAIL}>",
+        "to": [to_email],
+        "subject": "Sign in to Edu LLM",
+        "text": text_body,
+        "html": html_body,
     }
 
     response = httpx.post(
-        MAILJET_SEND_URL,
-        auth=(settings.MAILJET_API_KEY, settings.MAILJET_API_SECRET),
+        RESEND_SEND_URL,
+        headers={"Authorization": f"Bearer {settings.RESEND_API_KEY}"},
         json=payload,
         timeout=10.0,
     )
