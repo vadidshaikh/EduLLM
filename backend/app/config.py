@@ -41,5 +41,9 @@ class Settings(BaseSettings):
     LOGIN_TOKEN_EXPIRY_MINUTES: int = 15
     SESSION_JWT_EXPIRY_DAYS: int = 7
 
+    # Dev-only: comma-separated non-institute emails to log in as faculty,
+    # bypassing the @scet.ac.in domain check. Leave empty outside local dev.
+    DEV_FACULTY_EMAILS: str = ""
+
 
 settings = Settings()

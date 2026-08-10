@@ -64,3 +64,7 @@ class DocumentOut(BaseModel):
 class UploadResponse(BaseModel):
     document_id: UUID
     status: str
+
+
+class UpdateRolesRequest(BaseModel):
+    allowed_roles: list[str]

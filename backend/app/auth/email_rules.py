@@ -9,12 +9,18 @@ Student:  name.co23d1@scet.ac.in              — second segment has digits
 """
 import re
 
+from app.config import settings
+
 _DOMAIN = "@scet.ac.in"
 _STUDENT_SEGMENT_RE = re.compile(r"^([a-z]+)(\d{2})([a-z])(\d)$")
 
 
 class EmailFormatError(Exception):
     """Raised when an email isn't a recognizable @scet.ac.in address."""
+
+
+def _dev_faculty_emails() -> set[str]:
+    return {e.strip().lower() for e in settings.DEV_FACULTY_EMAILS.split(",") if e.strip()}
 
 
 def parse_institute_email(email: str) -> dict:
@@ -24,8 +30,13 @@ def parse_institute_email(email: str) -> dict:
 
     Example: parse_institute_email("jane.co23d1@scet.ac.in") ->
     {"role": "student", "dept": "co", "year": "23", "division": "d", "section": "1"}
+
+    Emails listed in DEV_FACULTY_EMAILS (dev/testing only) short-circuit to
+    faculty regardless of domain.
     """
     normalized = email.strip().lower()
+    if normalized in _dev_faculty_emails():
+        return {"role": "faculty"}
     if not normalized.endswith(_DOMAIN):
         raise EmailFormatError("email must be an @scet.ac.in address")
 

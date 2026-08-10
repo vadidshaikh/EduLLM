@@ -3,7 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
 
-from app.api.schemas import DocumentOut, UploadResponse
+from app.api.schemas import DocumentOut, UpdateRolesRequest, UploadResponse
 from app.auth.dependencies import require_faculty
 from app.db import queries
 from app.ingestion.pipeline import run_ingestion
@@ -50,6 +50,25 @@ async def upload_document(
 def list_documents(claims: dict = Depends(require_faculty)) -> list[DocumentOut]:
     """Returns the list of all uploaded documents, for faculty only."""
     return queries.list_documents()
+
+
+@router.patch("/admin/documents/{document_id}", response_model=DocumentOut)
+def update_document_access(
+    document_id: UUID, body: UpdateRolesRequest, claims: dict = Depends(require_faculty)
+) -> DocumentOut:
+    """Lets a faculty member change which roles can access an already-uploaded
+    document (e.g. faculty-only <-> both), taking effect immediately.
+    """
+    invalid = set(body.allowed_roles) - _VALID_ROLES
+    if invalid:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"invalid roles: {sorted(invalid)}")
+    if not body.allowed_roles:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "allowed_roles cannot be empty")
+
+    document = queries.update_document_roles(document_id, body.allowed_roles)
+    if document is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
+    return document
 
 
 @router.delete("/admin/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)

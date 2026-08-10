@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { deleteDocument, listDocuments, uploadDocument, ApiError } from "../api/client";
+import { deleteDocument, listDocuments, updateDocumentRoles, uploadDocument, ApiError } from "../api/client";
 import DocumentsTable from "./DocumentsTable";
 import UploadForm from "./UploadForm";
 
@@ -55,6 +55,18 @@ export default function AdminPage({ auth }) {
     }
   }
 
+  /**
+   * Changes a document's access roles and refreshes the document list, showing an error if it fails.
+   */
+  async function handleUpdateRoles(documentId, allowedRoles) {
+    try {
+      await updateDocumentRoles(auth.token, documentId, allowedRoles);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to update access.");
+    }
+  }
+
   return (
     <div className="page">
       <div className="admin-container">
@@ -64,7 +76,7 @@ export default function AdminPage({ auth }) {
         </div>
         <div className="admin-panel">
           <h2>Documents</h2>
-          <DocumentsTable documents={documents} onDelete={handleDelete} />
+          <DocumentsTable documents={documents} onDelete={handleDelete} onUpdateRoles={handleUpdateRoles} />
         </div>
       </div>
     </div>

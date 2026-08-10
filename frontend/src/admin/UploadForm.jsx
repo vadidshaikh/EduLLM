@@ -1,32 +1,25 @@
 import { useState } from "react";
 import "./UploadFormFile.css";
 
-const ROLES = ["student", "faculty"];
-
 /**
- * Shows a form for picking a file, typing a title, and choosing which roles can see it, then uploading it.
+ * Shows a form for picking a file, typing a title, and marking it classified (faculty-only) or open to everyone, then uploading it.
  */
 export default function UploadForm({ onUpload, uploading, error }) {
   const [file, setFile] = useState(null);
   const [title, setTitle] = useState("");
-  const [roles, setRoles] = useState(["student", "faculty"]);
+  const [classified, setClassified] = useState(false);
 
   /**
-   * Adds or removes a role from the selected roles list when its checkbox is clicked.
-   */
-  function toggleRole(role) {
-    setRoles((prev) => (prev.includes(role) ? prev.filter((r) => r !== role) : [...prev, role]));
-  }
-
-  /**
-   * Sends the selected file, title and roles to be uploaded when the form is submitted, then clears the form.
+   * Sends the selected file, title and derived roles to be uploaded when the form is submitted, then clears the form.
    */
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!file || !title.trim() || roles.length === 0) return;
-    await onUpload({ file, title: title.trim(), allowedRoles: roles });
+    if (!file || !title.trim()) return;
+    const allowedRoles = classified ? ["faculty"] : ["student", "faculty"];
+    await onUpload({ file, title: title.trim(), allowedRoles });
     setFile(null);
     setTitle("");
+    setClassified(false);
     e.target.reset();
   }
 
@@ -45,12 +38,14 @@ export default function UploadForm({ onUpload, uploading, error }) {
         onChange={(e) => setFile(e.target.files?.[0] ?? null)}
       />
       <div className="role-checkboxes">
-        {ROLES.map((role) => (
-          <label key={role}>
-            <input type="checkbox" checked={roles.includes(role)} onChange={() => toggleRole(role)} />
-            {role}
-          </label>
-        ))}
+        <label>
+          <input
+            type="checkbox"
+            checked={classified}
+            onChange={(e) => setClassified(e.target.checked)}
+          />
+          Classified (faculty only)
+        </label>
       </div>
       {error && <div className="status-line error">{error}</div>}
       <button className="btn" type="submit" disabled={uploading} style={{ alignSelf: "flex-start" }}>

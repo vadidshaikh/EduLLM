@@ -57,7 +57,9 @@ export default function Sidebar({ conversations, activeConversationId, onSelect,
               title="Delete conversation"
               onClick={(e) => {
                 e.stopPropagation();
-                onDelete(conversation.id);
+                if (window.confirm("Delete this conversation? This can't be undone.")) {
+                  onDelete(conversation.id);
+                }
               }}
             >
               ×

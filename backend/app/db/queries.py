@@ -92,6 +92,31 @@ def delete_document(document_id: UUID) -> None:
         conn.commit()
 
 
+def update_document_roles(document_id: UUID, allowed_roles: list[str]) -> dict[str, Any] | None:
+    """Changes which roles can access a document, propagating the new roles
+    onto its existing chunks too (they carry a denormalized copy for
+    `search_chunks`'s access-control check) so the change takes effect
+    immediately, without re-ingestion.
+    """
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            UPDATE documents
+            SET allowed_roles = %s, updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (allowed_roles, document_id),
+        ).fetchone()
+        if row is not None:
+            conn.execute(
+                "UPDATE chunks SET allowed_roles = %s WHERE document_id = %s",
+                (allowed_roles, document_id),
+            )
+        conn.commit()
+        return row
+
+
 def update_document_status(document_id: UUID, status: str) -> None:
     """Updates a document's processing status (e.g. queued, processing, indexed, failed)."""
     with pool.connection() as conn:

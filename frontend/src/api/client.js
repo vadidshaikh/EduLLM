@@ -100,4 +100,15 @@ export function deleteDocument(token, documentId) {
   return request(`/admin/documents/${documentId}`, { method: "DELETE", token });
 }
 
+/**
+ * Changes which roles can access an existing document.
+ */
+export function updateDocumentRoles(token, documentId, allowedRoles) {
+  return request(`/admin/documents/${documentId}`, {
+    method: "PATCH",
+    token,
+    body: { allowed_roles: allowedRoles },
+  });
+}
+
 export { ApiError };
