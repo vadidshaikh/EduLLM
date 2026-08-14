@@ -203,6 +203,12 @@ export default function ChatPage({ auth }) {
               placeholder="Ask a question..."
               value={query}
               onChange={handleQueryChange}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSubmit(e);
+                }
+              }}
             />
             <button className="btn" type="submit" disabled={loading}>
               {loading ? "Asking..." : "Ask"}
