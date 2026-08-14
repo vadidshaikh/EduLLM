@@ -478,6 +478,62 @@ select.input {
   margin: 0 0 1rem;
 }
 
+.admin-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.admin-panel-header h2 {
+  margin: 0;
+}
+
+.btn-inline {
+  padding: 0.15rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.btn-link:hover {
+  text-decoration: underline;
+}
+
+.title-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.title-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.title-rename-btn {
+  flex-shrink: 0;
+}
+
+.title-edit-input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  height: 30px;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.88rem;
+}
+
 .upload-form {
   display: flex;
   flex-direction: column;
@@ -500,8 +556,33 @@ select.input {
 
 table.documents-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 0.88rem;
+}
+
+table.documents-table .col-title {
+  width: auto;
+}
+
+table.documents-table .col-classified {
+  width: 15%;
+}
+
+table.documents-table .col-status {
+  width: 12%;
+}
+
+table.documents-table .col-version {
+  width: 8%;
+}
+
+table.documents-table .col-uploaded {
+  width: 21%;
+}
+
+table.documents-table .col-actions {
+  width: 11%;
 }
 
 table.documents-table th {
@@ -513,12 +594,32 @@ table.documents-table th {
   letter-spacing: 0.03em;
   padding: 0.5rem 0.6rem;
   border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 table.documents-table td {
   padding: 0.6rem;
   border-bottom: 1px solid var(--border);
   vertical-align: middle;
+  overflow: hidden;
+}
+
+.classified-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+
+.uploaded-cell {
+  white-space: nowrap;
+}
+
+.btn-danger {
+  background: var(--danger);
+  color: var(--accent-text);
 }
 
 .pill {

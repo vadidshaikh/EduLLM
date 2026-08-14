@@ -117,6 +117,22 @@ def update_document_roles(document_id: UUID, allowed_roles: list[str]) -> dict[s
         return row
 
 
+def update_document_title(document_id: UUID, title: str) -> dict[str, Any] | None:
+    """Renames a document."""
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            UPDATE documents
+            SET title = %s, updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (title, document_id),
+        ).fetchone()
+        conn.commit()
+        return row
+
+
 def update_document_status(document_id: UUID, status: str) -> None:
     """Updates a document's processing status (e.g. queued, processing, indexed, failed)."""
     with pool.connection() as conn:

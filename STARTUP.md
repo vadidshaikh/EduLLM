@@ -59,8 +59,12 @@ python backend/scripts/init_db.py
 ```bash
 cd backend
 conda activate edullm
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --reload-dir app
 ```
+
+`--reload-dir app` limits auto-reload to the `app/` package. Without it, uvicorn
+watches the whole `backend/` working directory, so editing `scripts/*.py` (e.g.
+`bulk_upload_docs.py`) or anything under `storage/` also restarts the server.
 
 Health check: `curl http://localhost:8000/health`
 
@@ -118,7 +122,7 @@ conda activate edullm
 ```bash
 docker compose up -d postgres
 cd backend && python scripts/init_db.py
-uvicorn app.main:app --reload  # This works without Docker
+uvicorn app.main:app --reload --reload-dir app  # This works without Docker
 
 cd frontend
 npm run dev

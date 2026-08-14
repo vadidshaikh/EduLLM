@@ -66,5 +66,6 @@ class UploadResponse(BaseModel):
     status: str
 
 
-class UpdateRolesRequest(BaseModel):
-    allowed_roles: list[str]
+class UpdateDocumentRequest(BaseModel):
+    title: str | None = None
+    allowed_roles: list[str] | None = None

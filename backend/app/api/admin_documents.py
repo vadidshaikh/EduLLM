@@ -3,7 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
 
-from app.api.schemas import DocumentOut, UpdateRolesRequest, UploadResponse
+from app.api.schemas import DocumentOut, UpdateDocumentRequest, UploadResponse
 from app.auth.dependencies import require_faculty
 from app.db import queries
 from app.ingestion.pipeline import run_ingestion
@@ -53,21 +53,35 @@ def list_documents(claims: dict = Depends(require_faculty)) -> list[DocumentOut]
 
 
 @router.patch("/admin/documents/{document_id}", response_model=DocumentOut)
-def update_document_access(
-    document_id: UUID, body: UpdateRolesRequest, claims: dict = Depends(require_faculty)
+def update_document(
+    document_id: UUID, body: UpdateDocumentRequest, claims: dict = Depends(require_faculty)
 ) -> DocumentOut:
-    """Lets a faculty member change which roles can access an already-uploaded
-    document (e.g. faculty-only <-> both), taking effect immediately.
+    """Lets a faculty member rename a document and/or change which roles can
+    access it (e.g. faculty-only <-> both), taking effect immediately.
     """
-    invalid = set(body.allowed_roles) - _VALID_ROLES
-    if invalid:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"invalid roles: {sorted(invalid)}")
-    if not body.allowed_roles:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "allowed_roles cannot be empty")
+    if body.title is None and body.allowed_roles is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "no fields to update")
 
-    document = queries.update_document_roles(document_id, body.allowed_roles)
-    if document is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
+    document = None
+
+    if body.allowed_roles is not None:
+        invalid = set(body.allowed_roles) - _VALID_ROLES
+        if invalid:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"invalid roles: {sorted(invalid)}")
+        if not body.allowed_roles:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "allowed_roles cannot be empty")
+        document = queries.update_document_roles(document_id, body.allowed_roles)
+        if document is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
+
+    if body.title is not None:
+        title = body.title.strip()
+        if not title:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "title cannot be empty")
+        document = queries.update_document_title(document_id, title)
+        if document is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
+
     return document
 
 

@@ -111,4 +111,15 @@ export function updateDocumentRoles(token, documentId, allowedRoles) {
   });
 }
 
+/**
+ * Renames an existing document.
+ */
+export function renameDocument(token, documentId, title) {
+  return request(`/admin/documents/${documentId}`, {
+    method: "PATCH",
+    token,
+    body: { title },
+  });
+}
+
 export { ApiError };
