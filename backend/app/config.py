@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
 
     HF_TOKEN: str = ""
-    LLM_MODEL: str = "huggingface/featherless-ai/Qwen/Qwen2.5-7B-Instruct"
+    LLM_MODEL: str = "meta/muse-glimmer-30b"
     EMBEDDING_MODEL: str = "sentence-transformers/multi-qa-mpnet-base-dot-v1"
 
     STORAGE_DIR: str = str(Path(__file__).resolve().parent.parent / "storage")

@@ -17,8 +17,6 @@ from app.rag.state import RAGState
 
 logger = logging.getLogger(__name__)
 
-VALID_ROLES = {"student", "faculty"}
-
 _HISTORY_WINDOW = 10
 _NUMBER_PATTERN = re.compile(r"-?\d[\d,]*\.?\d*")
 
@@ -31,25 +29,6 @@ def _format_history(history: list[dict]) -> str:
 def _context_text(state: RAGState) -> str:
     """Joins all the retrieved document chunks into one big block of text to feed to the AI model."""
     return "\n\n---\n\n".join(c["chunk_text"] for c in state["retrieved_chunks"])
-
-
-def verify_token_node(state: RAGState) -> dict:
-    """Defensive check only — the real JWT verification already happened in
-    the FastAPI dependency before the graph was invoked (see api/query.py).
-    This node exists so the auth step is an explicit, traceable node in the
-    graph per the spec, not a hidden precondition.
-    """
-    if not state.get("sub"):
-        raise ValueError("missing verified subject in graph state")
-    return {}
-
-
-def resolve_role_node(state: RAGState) -> dict:
-    """Checks that the user's role (student or faculty) is present and valid, since it controls which documents they can see."""
-    role = state.get("role")
-    if role not in VALID_ROLES:
-        raise ValueError(f"missing or invalid role in graph state: {role!r}")
-    return {"role": role}
 
 
 def load_history_node(state: RAGState) -> dict:

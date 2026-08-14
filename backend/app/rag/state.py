@@ -3,7 +3,6 @@ from typing import Any, TypedDict
 
 class RAGState(TypedDict, total=False):
     role: str
-    sub: str
     query: str
     conversation_id: str
     history: list[dict[str, Any]]

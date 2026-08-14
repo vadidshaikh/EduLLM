@@ -38,5 +38,5 @@ Then visit `http://localhost:5173` and sign in with your institute email (`first
 
 ## Technologies
 
-FastAPI · LangGraph · React 19 · PostgreSQL + pgvector · LiteLLM · Docker Compose
+FastAPI · LangGraph · React 19 · PostgreSQL + pgvector · NVIDIA API Catalog · Docker Compose
 w

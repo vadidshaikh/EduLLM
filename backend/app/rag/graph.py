@@ -5,13 +5,11 @@ from app.rag.nodes import (
     generate_answer_node,
     generate_chart_node,
     load_history_node,
-    resolve_role_node,
     respond_node,
     retrieve_filtered_node,
     save_messages_node,
     should_chart_node,
     validate_chart_data_node,
-    verify_token_node,
 )
 from app.rag.state import RAGState
 
@@ -27,10 +25,8 @@ def _route_after_should_chart(state: RAGState) -> str:
 
 
 def build_graph():
-    """Wires together all the pipeline steps (verify login, find role, search documents, answer, maybe chart, respond, save) into the question-answering flow."""
+    """Wires together the question-answering flow: load history, search documents, answer, maybe chart, respond, save."""
     g = StateGraph(RAGState)
-    g.add_node("verify_token", verify_token_node)
-    g.add_node("resolve_role", resolve_role_node)
     g.add_node("load_history", load_history_node)
     g.add_node("condense_query", condense_query_node)
     g.add_node("retrieve_filtered", retrieve_filtered_node)
@@ -41,9 +37,7 @@ def build_graph():
     g.add_node("respond", respond_node)
     g.add_node("save_messages", save_messages_node)
 
-    g.add_edge(START, "verify_token")
-    g.add_edge("verify_token", "resolve_role")
-    g.add_edge("resolve_role", "load_history")
+    g.add_edge(START, "load_history")
 
     # A raw follow-up ("what about for final year students?") retrieves
     # badly on its own — condense it into a standalone query first, but only

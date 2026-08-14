@@ -23,7 +23,6 @@ def query(
     result = graph.invoke(
         {
             "role": claims["role"],
-            "sub": claims["sub"],
             "query": body.query,
             "conversation_id": conversation_id,
         }

@@ -19,7 +19,8 @@ cp .env.example .env
 ```
 
 Edit `.env` if you need to:
-- `HF_TOKEN` — your HuggingFace API token (for embeddings and LLM)
+- `NVIDIA_API_KEY` — your NVIDIA API Catalog key for chat models
+- `HF_TOKEN` — optional HuggingFace token if you need it for downloads or future embeddings
 - `RESEND_API_KEY` — leave blank for dev (magic links print to console); set to send real emails via Resend
 - `DATABASE_URL` — default assumes Docker Postgres on port 5433; change if using a different setup
 - `JWT_SECRET` — already has a dev key; generate a new one for production:
@@ -152,8 +153,8 @@ Then manually edit `frontend/src/auth/` to re-add the old `DevLoginPage.jsx` (it
 - If backend is on a different port, update it
 
 **LLM gives "provider not available" errors?**
-- The default `LLM_MODEL` provider rotates. Check `.env.example` for alternatives
-- Common swap: `LLM_MODEL=openai/gpt-4` (if you have an OpenAI key)
+- Check that `NVIDIA_API_KEY` is set in `.env`
+- The default `LLM_MODEL` is a NVIDIA API Catalog model id. Swap it for another catalog model if needed
 
 **Magic link isn't appearing in console?**
 - Verify `logging.basicConfig()` is in `backend/app/main.py` (it is)
