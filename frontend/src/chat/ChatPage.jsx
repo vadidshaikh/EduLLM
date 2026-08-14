@@ -7,7 +7,6 @@ import {
   updateConversation,
   ApiError,
 } from "../api/client";
-import RoleBadge from "./RoleBadge";
 import AnswerBlock from "./AnswerBlock";
 import Sidebar from "./Sidebar";
 
@@ -177,11 +176,13 @@ export default function ChatPage({ auth }) {
       />
       <div className="page">
         <div className="chat-container">
-          <div className="chat-header">
-            <h1 className="welcome-heading">
-              <span className="welcome-wave">W</span>elcome, <span className="welcome-name">Back!!</span>
-            </h1>
-          </div>
+          {messages.length === 0 && (
+            <div className="chat-header">
+              <h1 className="welcome-heading">
+                <span className="welcome-wave">W</span>elcome, <span className="welcome-name">Back!!</span>
+              </h1>
+            </div>
+          )}
 
           <div className="messages-list">
             {messages.map((message, i) =>
