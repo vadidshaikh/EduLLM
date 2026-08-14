@@ -25,7 +25,13 @@ class QueryResponse(BaseModel):
 class ConversationOut(BaseModel):
     id: UUID
     title: str | None
+    is_pinned: bool
     updated_at: datetime
+
+
+class UpdateConversationRequest(BaseModel):
+    title: str | None = None
+    is_pinned: bool | None = None
 
 
 class MessageOut(BaseModel):

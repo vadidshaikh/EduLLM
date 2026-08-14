@@ -9,7 +9,6 @@ import {
 } from "../api/client";
 import DocumentsTable from "./DocumentsTable";
 import UploadForm from "./UploadForm";
-import BulkUploadForm from "./BulkUploadForm";
 
 /**
  * Shows the admin page with a form to upload documents and a table listing all uploaded documents.
@@ -46,36 +45,28 @@ export default function AdminPage({ auth }) {
   }, [refresh]);
 
   /**
-   * Uploads a new document and then refreshes the document list, showing an error if the upload fails.
+   * Uploads either one file (with the provided title) or multiple files
+   * (each titled from its own filename), then refreshes once at the end.
    */
   async function handleUpload(payload) {
     setUploading(true);
     setError("");
     try {
-      await uploadDocument(auth.token, payload);
-      await refresh();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Upload failed.");
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  /**
-   * Uploads several files at once, each titled after its own filename by
-   * default (renameable later from the table), refreshing once at the end.
-   */
-  async function handleBulkUpload(files, allowedRoles) {
-    setUploading(true);
-    setError("");
-    try {
-      for (const file of files) {
-        const title = file.name.replace(/\.[^/.]+$/, "") || file.name;
-        await uploadDocument(auth.token, { file, title, allowedRoles });
+      if (payload.mode === "bulk") {
+        for (const file of payload.files) {
+          const title = file.name.replace(/\.[^/.]+$/, "") || file.name;
+          await uploadDocument(auth.token, { file, title, allowedRoles: payload.allowedRoles });
+        }
+      } else {
+        await uploadDocument(auth.token, {
+          file: payload.file,
+          title: payload.title,
+          allowedRoles: payload.allowedRoles,
+        });
       }
       await refresh();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Bulk upload failed.");
+      setError(err instanceof ApiError ? err.message : "Upload failed.");
     } finally {
       setUploading(false);
     }
@@ -121,16 +112,12 @@ export default function AdminPage({ auth }) {
     <div className="page">
       <div className="admin-container">
         <div className="admin-panel">
-          <h2>Upload documents</h2>
+          <h2>Upload document(s)</h2>
           <UploadForm onUpload={handleUpload} uploading={uploading} error={error} />
-          <BulkUploadForm onUpload={handleBulkUpload} uploading={uploading} />
         </div>
         <div className="admin-panel">
           <div className="admin-panel-header">
             <h2>Documents</h2>
-            <button className="btn" onClick={refresh} disabled={loading}>
-              {loading ? "Refreshing..." : "Refresh"}
-            </button>
           </div>
           <DocumentsTable
             documents={documents}

@@ -2,26 +2,32 @@ import { useRef, useState } from "react";
 import "./UploadFormFile.css";
 
 /**
- * Shows a form for typing a title (defaulting to the picked file's name),
- * picking a file, and marking it classified (faculty-only) or open to
- * everyone, then uploading it.
+ * Shows one upload form for both single and multi-file uploads.
+ * If one file is selected, its title can be edited before upload.
+ * If multiple files are selected, each file uses its own filename as title.
  */
 export default function UploadForm({ onUpload, uploading, error }) {
-  const [file, setFile] = useState(null);
+  const [files, setFiles] = useState([]);
   const [title, setTitle] = useState("");
   const [titleEdited, setTitleEdited] = useState(false);
   const [classified, setClassified] = useState(false);
   const fileInputRef = useRef(null);
 
   /**
-   * Records the picked file and, unless the title was already hand-edited,
-   * fills the title in with the file's name (without its extension).
+   * Records picked files and auto-fills the title when exactly one file is selected.
    */
   function handleFileChange(e) {
-    const selected = e.target.files?.[0] ?? null;
-    setFile(selected);
-    if (selected && !titleEdited) {
+    const selectedFiles = Array.from(e.target.files ?? []);
+    setFiles(selectedFiles);
+
+    if (selectedFiles.length === 1 && !titleEdited) {
+      const selected = selectedFiles[0];
       setTitle(selected.name.replace(/\.[^/.]+$/, "") || selected.name);
+    }
+
+    if (selectedFiles.length !== 1) {
+      setTitleEdited(false);
+      setTitle("");
     }
   }
 
@@ -31,14 +37,22 @@ export default function UploadForm({ onUpload, uploading, error }) {
   }
 
   /**
-   * Sends the selected file, title and derived roles to be uploaded when the form is submitted, then clears the form.
+   * Submits as single-upload logic for one file, or bulk-upload logic for many files.
    */
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!file || !title.trim()) return;
+    if (files.length === 0) return;
+
     const allowedRoles = classified ? ["faculty"] : ["student", "faculty"];
-    await onUpload({ file, title: title.trim(), allowedRoles });
-    setFile(null);
+
+    if (files.length === 1) {
+      if (!title.trim()) return;
+      await onUpload({ mode: "single", file: files[0], title: title.trim(), allowedRoles });
+    } else {
+      await onUpload({ mode: "bulk", files, allowedRoles });
+    }
+
+    setFiles([]);
     setTitle("");
     setTitleEdited(false);
     setClassified(false);
@@ -51,24 +65,33 @@ export default function UploadForm({ onUpload, uploading, error }) {
         <input
           className="input"
           type="text"
-          placeholder="Document title"
+          placeholder={files.length > 1 ? "Title is auto-set per file" : "Document title"}
           value={title}
           onChange={handleTitleChange}
+          disabled={files.length > 1}
         />
         <button
           type="button"
           className="btn-secondary btn choose-file-btn"
           onClick={() => fileInputRef.current?.click()}
         >
-          {file ? file.name : "Choose File"}
+          {files.length === 0
+            ? "Choose File(s)"
+            : files.length === 1
+              ? files[0].name
+              : `${files.length} file(s) selected`}
         </button>
         <input
           ref={fileInputRef}
           className="file-input-hidden"
           type="file"
+          multiple
           onChange={handleFileChange}
         />
       </div>
+      {files.length > 1 && (
+        <div className="status-line">Multiple files selected: titles will default to filenames.</div>
+      )}
       <div className="role-checkboxes">
         <label>
           <input
@@ -81,7 +104,7 @@ export default function UploadForm({ onUpload, uploading, error }) {
       </div>
       {error && <div className="status-line error">{error}</div>}
       <button className="btn" type="submit" disabled={uploading} style={{ alignSelf: "flex-start" }}>
-        {uploading ? "Uploading..." : "Upload"}
+        {uploading ? "Uploading..." : files.length > 1 ? "Upload All" : "Upload"}
       </button>
     </form>
   );

@@ -2,7 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.schemas import ConversationOut, MessageOut
+from app.api.schemas import ConversationOut, MessageOut, UpdateConversationRequest
 from app.auth.dependencies import get_claims
 from app.db import queries
 
@@ -40,3 +40,31 @@ def delete_conversation(conversation_id: UUID, claims: dict = Depends(get_claims
     """Lets the logged-in user permanently delete one of their own conversations."""
     _owned_conversation(conversation_id, claims["sub"])
     queries.delete_conversation(conversation_id)
+
+
+@router.patch("/conversations/{conversation_id}", response_model=ConversationOut)
+def update_conversation(
+    conversation_id: UUID,
+    body: UpdateConversationRequest,
+    claims: dict = Depends(get_claims),
+) -> ConversationOut:
+    """Lets the logged-in user rename and/or pin one of their own conversations."""
+    _owned_conversation(conversation_id, claims["sub"])
+
+    if body.title is None and body.is_pinned is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "provide title and/or is_pinned")
+
+    title: str | None = None
+    if body.title is not None:
+        title = body.title.strip()
+        if not title:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "title cannot be empty")
+
+    updated = queries.update_conversation(
+        conversation_id,
+        title=title,
+        is_pinned=body.is_pinned,
+    )
+    if updated is None:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "conversation update failed")
+    return ConversationOut(**updated)

@@ -4,6 +4,7 @@ import {
   listConversations,
   getConversationMessages,
   deleteConversation,
+  updateConversation,
   ApiError,
 } from "../api/client";
 import RoleBadge from "./RoleBadge";
@@ -99,6 +100,32 @@ export default function ChatPage({ auth }) {
   }
 
   /**
+   * Renames a conversation and reloads the sidebar list.
+   */
+  async function handleRename(id, title) {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    try {
+      await updateConversation(auth.token, id, { title: trimmed });
+      refreshConversations();
+    } catch {
+      // best-effort — sidebar just won't update if this fails
+    }
+  }
+
+  /**
+   * Pins or unpins a conversation and reloads the sidebar list.
+   */
+  async function handleTogglePin(id, isPinned) {
+    try {
+      await updateConversation(auth.token, id, { isPinned });
+      refreshConversations();
+    } catch {
+      // best-effort — sidebar just won't update if this fails
+    }
+  }
+
+  /**
    * Sends the typed question to the AI, adds the question and its answer to the chat, and starts a new conversation entry if needed.
    */
   async function handleSubmit(e) {
@@ -145,6 +172,8 @@ export default function ChatPage({ auth }) {
         onSelect={handleSelect}
         onNewChat={handleNewChat}
         onDelete={handleDelete}
+        onRename={handleRename}
+        onTogglePin={handleTogglePin}
       />
       <div className="page">
         <div className="chat-container">

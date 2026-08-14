@@ -214,13 +214,15 @@ def get_conversation(conversation_id: UUID) -> dict[str, Any] | None:
 
 
 def list_conversations(user_email: str) -> list[dict[str, Any]]:
-    """Fetches all of a user's conversations for display in the sidebar, most recently updated first."""
+    """Fetches all of a user's conversations for display in the sidebar.
+    Pinned conversations are shown first, then most recently updated.
+    """
     with pool.connection() as conn:
         return conn.execute(
             """
-            SELECT id, title, updated_at FROM conversations
+            SELECT id, title, is_pinned, updated_at FROM conversations
             WHERE user_email = %s
-            ORDER BY updated_at DESC
+            ORDER BY is_pinned DESC, updated_at DESC
             """,
             (user_email,),
         ).fetchall()
@@ -234,6 +236,43 @@ def update_conversation_title(conversation_id: UUID, title: str) -> None:
             (title, conversation_id),
         )
         conn.commit()
+
+
+def update_conversation(
+    conversation_id: UUID,
+    *,
+    title: str | None = None,
+    is_pinned: bool | None = None,
+) -> dict[str, Any] | None:
+    """Updates one or both editable conversation fields and returns the row."""
+    if title is None and is_pinned is None:
+        return None
+
+    sets: list[str] = []
+    params: list[Any] = []
+
+    if title is not None:
+        sets.append("title = %s")
+        params.append(title)
+    if is_pinned is not None:
+        sets.append("is_pinned = %s")
+        params.append(is_pinned)
+
+    sets.append("updated_at = now()")
+    params.append(conversation_id)
+
+    with pool.connection() as conn:
+        row = conn.execute(
+            f"""
+            UPDATE conversations
+            SET {", ".join(sets)}
+            WHERE id = %s
+            RETURNING id, title, is_pinned, updated_at
+            """,
+            tuple(params),
+        ).fetchone()
+        conn.commit()
+        return row
 
 
 def touch_conversation(conversation_id: UUID) -> None:

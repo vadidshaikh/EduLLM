@@ -76,6 +76,16 @@ export function deleteConversation(token, conversationId) {
 }
 
 /**
+ * Renames a conversation and/or updates its pinned state.
+ */
+export function updateConversation(token, conversationId, { title, isPinned }) {
+  const body = {};
+  if (title !== undefined) body.title = title;
+  if (isPinned !== undefined) body.is_pinned = isPinned;
+  return request(`/conversations/${conversationId}`, { method: "PATCH", token, body });
+}
+
+/**
  * Fetches the list of documents uploaded to the admin panel.
  */
 export function listDocuments(token) {

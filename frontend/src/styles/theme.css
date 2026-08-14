@@ -250,9 +250,11 @@ select.input {
 }
 
 .conversation-item {
+  position: relative;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 0.4rem;
+  height: 38px;
   padding: 0.5rem 0.5rem;
   border-radius: 6px;
   cursor: pointer;
@@ -270,30 +272,86 @@ select.input {
 }
 
 .conversation-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.conversation-time {
-  font-size: 0.72rem;
-  color: var(--text-muted);
-  flex-shrink: 0;
+.conversation-pin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.82rem;
+  line-height: 1;
 }
 
-.conversation-delete {
+.conversation-menu-trigger {
   background: none;
   border: none;
   color: var(--text-muted);
-  font-size: 1rem;
+  font-size: 1.1rem;
   line-height: 1;
-  padding: 0 0.2rem;
+  padding: 0 0.3rem;
   flex-shrink: 0;
 }
 
-.conversation-delete:hover {
-  color: var(--danger);
+.conversation-menu-trigger:hover {
+  color: var(--text);
+}
+
+.conversation-menu {
+  position: fixed;
+  width: fit-content;
+  min-width: 0;
+  max-width: 260px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem;
+  z-index: 1000;
+}
+
+.conversation-menu-item {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  text-align: left;
+  padding: 0.4rem 0.45rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.conversation-menu-item:hover {
+  background: var(--surface);
+}
+
+.conversation-menu-item:focus-visible {
+  outline: 1px solid var(--accent);
+}
+
+.conversation-inline-rename {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+
+.conversation-rename-input.input {
+  height: 24px;
+  font-size: 0.82rem;
+  line-height: 1.1;
+  padding: 0.2rem 0.45rem;
+  min-width: 0;
 }
 
 .messages-list {
