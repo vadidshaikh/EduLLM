@@ -72,11 +72,14 @@ as a chart.
 
 Answer "yes" ONLY when BOTH conditions are satisfied:
 
-1. The question explicitly requests or clearly requires a statistical
-   comparison, distribution, breakdown, or trend.
+1. The user explicitly asks for a chart or graph (for example: "show a
+   chart", "plot this", "visualize this", "bar chart", "line graph").
 
 2. The answer/context contains sufficient explicit numeric data that can be
    directly represented visually.
+
+If the user does NOT explicitly ask for a chart/graph, answer "no" even if
+the data could be charted.
 
 Answer "no" for:
 - simple factual questions
@@ -108,6 +111,19 @@ Output ONLY a single valid JSON object in exactly this shape:
   "labels": ["label1", "label2"],
   "datasets": [{"label": "series name", "data": [1, 2]}]
 }
+
+Choosing "type" (pick the one that matches the data's shape, do not default
+to "bar" out of habit):
+- "line": values change across an ordered sequence such as dates, years,
+  semesters, or sequential attempts.
+- "bar": comparing magnitudes across distinct categories (departments,
+  courses, subjects, students, etc.).
+- "pie" or "doughnut": a set of parts that make up one whole, especially
+  percentages or shares that sum to (or near) 100%. Prefer "doughnut" when
+  there are more than 4 slices.
+- "radar": comparing several different attributes/metrics for one or few
+  items (e.g. scores across multiple subjects for one student).
+- Use "bar" only when none of the above fit better.
 
 Rules:
 - "type" must be one of: bar, line, pie, doughnut, radar.
