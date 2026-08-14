@@ -347,10 +347,25 @@ select.input {
   border: none;
   color: var(--text);
   text-align: left;
-  padding: 0.4rem 0.45rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 30px;
+  padding: 0.4rem 0.55rem;
   border-radius: 6px;
   font-size: 0.8rem;
   white-space: nowrap;
+}
+
+.conversation-menu-icon {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  flex: 0 0 16px;
+}
+
+.conversation-menu-icon-invert {
+  filter: invert(1);
 }
 
 .conversation-menu-item:hover {
@@ -503,7 +518,116 @@ select.input {
   font-family: var(--font-serif);
   font-size: 1.08rem;
   line-height: 1.65;
-  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.answer-text > *:first-child {
+  margin-top: 0;
+}
+
+.answer-text > *:last-child {
+  margin-bottom: 0;
+}
+
+.answer-text p {
+  margin: 0 0 0.85rem;
+}
+
+.answer-text ul,
+.answer-text ol {
+  margin: 0 0 0.85rem 1.35rem;
+  padding: 0;
+}
+
+.answer-text li {
+  margin: 0.25rem 0;
+}
+
+.answer-text li > p {
+  margin: 0.25rem 0;
+}
+
+.answer-text h1,
+.answer-text h2,
+.answer-text h3,
+.answer-text h4 {
+  margin: 1rem 0 0.45rem;
+  font-family: var(--font-sans);
+  line-height: 1.25;
+}
+
+.answer-text h1 {
+  font-size: 1.35rem;
+}
+
+.answer-text h2 {
+  font-size: 1.22rem;
+}
+
+.answer-text h3,
+.answer-text h4 {
+  font-size: 1.08rem;
+}
+
+.answer-text a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+.answer-text blockquote {
+  margin: 0 0 0.85rem;
+  padding-left: 0.9rem;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-muted);
+}
+
+.answer-text code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.08rem 0.28rem;
+}
+
+.answer-text pre {
+  margin: 0 0 0.85rem;
+  overflow-x: auto;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.85rem;
+}
+
+.answer-text pre code {
+  display: block;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  white-space: pre;
+}
+
+.answer-text table {
+  display: block;
+  width: 100%;
+  margin: 0 0 0.85rem;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-family: var(--font-sans);
+  font-size: 0.92rem;
+}
+
+.answer-text th,
+.answer-text td {
+  border: 1px solid var(--border);
+  padding: 0.45rem 0.6rem;
+  text-align: left;
+}
+
+.answer-text th {
+  background: var(--surface-raised);
+  font-weight: 700;
 }
 
 .sources-row {
