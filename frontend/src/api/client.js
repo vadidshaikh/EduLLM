@@ -55,6 +55,54 @@ export function queryLLM(token, conversationId, query) {
 }
 
 /**
+ * Sends a user's question to the backend and streams the answer back as it's generated.
+ * Calls the matching handler in `handlers` as each newline-delimited JSON event arrives:
+ * onStart({conversation_id}), onToken(text), onDone({answer, chart, sources}), onError(message).
+ * Uses fetch + a manually-read stream (not EventSource) because EventSource can't send the
+ * Authorization header this API requires.
+ */
+export async function queryLLMStream(token, conversationId, query, { onStart, onToken, onDone, onError } = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(`${BASE_URL}/query/stream`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ conversation_id: conversationId, query }),
+  });
+
+  if (!res.ok || !res.body) {
+    const detail = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, detail.detail || res.statusText);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  const handleLine = (line) => {
+    if (!line.trim()) return;
+    const event = JSON.parse(line);
+    if (event.type === "start") onStart?.(event);
+    else if (event.type === "token") onToken?.(event.text);
+    else if (event.type === "done") onDone?.(event);
+    else if (event.type === "error") onError?.(event.message);
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let newlineIndex;
+    while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
+      handleLine(buffer.slice(0, newlineIndex));
+      buffer = buffer.slice(newlineIndex + 1);
+    }
+  }
+  handleLine(buffer);
+}
+
+/**
  * Fetches the list of the user's past conversations.
  */
 export function listConversations(token) {

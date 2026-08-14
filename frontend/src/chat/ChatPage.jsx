@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import {
-  queryLLM,
+  queryLLMStream,
   listConversations,
   getConversationMessages,
   deleteConversation,
@@ -10,13 +10,10 @@ import {
 import AnswerBlock from "./AnswerBlock";
 import Sidebar from "./Sidebar";
 
-/**
- * Converts a fresh answer just received from the server into the message format used for display.
- * Example: mapLiveResponse({ answer: "Hi", chart: null, sources: [] }) -> { role: "assistant", content: "Hi", chart: null, sources: [] }
- */
-function mapLiveResponse(response) {
-  return { role: "assistant", content: response.answer, chart: response.chart, sources: response.sources };
-}
+// How close to the bottom (in pixels) counts as "still at the bottom" for
+// auto-scroll purposes — small enough that a user who's actually scrolled
+// up to read something isn't yanked back down.
+const AUTO_SCROLL_THRESHOLD_PX = 80;
 
 /**
  * Converts a message loaded from a saved conversation into the message format used for display.
@@ -36,6 +33,10 @@ export default function ChatPage({ auth }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const textareaRef = useRef(null);
+  const messagesListRef = useRef(null);
+  // A ref (not state) because the scroll handler needs the latest value
+  // synchronously on every scroll event, without waiting on a re-render.
+  const autoScrollRef = useRef(true);
 
   /**
    * Grows or shrinks the question textarea's height to fit what's been typed, within a minimum and maximum size.
@@ -61,6 +62,28 @@ export default function ChatPage({ auth }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Keeps the view pinned to the newest message (e.g. while an answer is
+  // streaming in) as long as the user hasn't scrolled up to read something
+  // earlier. Runs on every message update rather than just while streaming
+  // because that's the only reliable signal that new content was added.
+  useEffect(() => {
+    const el = messagesListRef.current;
+    if (el && autoScrollRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [messages]);
+
+  /**
+   * Tracks whether the user is still scrolled to the bottom of the message
+   * list, so the streaming auto-scroll knows whether to keep following.
+   */
+  function handleMessagesScroll() {
+    const el = messagesListRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    autoScrollRef.current = distanceFromBottom < AUTO_SCROLL_THRESHOLD_PX;
+  }
+
   /**
    * Clears the current conversation so the user can start a fresh chat.
    */
@@ -68,6 +91,7 @@ export default function ChatPage({ auth }) {
     setConversationId(null);
     setMessages([]);
     setError("");
+    autoScrollRef.current = true;
   }
 
   /**
@@ -77,6 +101,7 @@ export default function ChatPage({ auth }) {
     if (id === conversationId) return;
     setConversationId(id);
     setError("");
+    autoScrollRef.current = true;
     try {
       const stored = await getConversationMessages(auth.token, id);
       setMessages(stored.map(mapStoredMessage));
@@ -125,7 +150,19 @@ export default function ChatPage({ auth }) {
   }
 
   /**
-   * Sends the typed question to the AI, adds the question and its answer to the chat, and starts a new conversation entry if needed.
+   * Appends a chunk of text to the currently-streaming assistant message (always the last one in the list).
+   */
+  function appendToLastMessage(text) {
+    setMessages((prev) => {
+      const next = [...prev];
+      const last = next[next.length - 1];
+      next[next.length - 1] = { ...last, content: last.content + text };
+      return next;
+    });
+  }
+
+  /**
+   * Sends the typed question to the AI and streams the answer into the chat as it's generated, starting a new conversation entry if needed.
    */
   async function handleSubmit(e) {
     e.preventDefault();
@@ -134,20 +171,38 @@ export default function ChatPage({ auth }) {
 
     setLoading(true);
     setError("");
-    setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
+    // The user just sent a message — always follow the reply as it streams
+    // in, even if they'd scrolled up earlier in the conversation.
+    autoScrollRef.current = true;
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", content: trimmed },
+      { role: "assistant", content: "", chart: null, sources: [] },
+    ]);
     setQuery("");
 
     const isNewConversation = conversationId === null;
     try {
-      const response = await queryLLM(auth.token, conversationId, trimmed);
-      setMessages((prev) => [...prev, mapLiveResponse(response)]);
-      if (isNewConversation) {
-        setConversationId(response.conversation_id);
-        refreshConversations();
-        // Title generation runs async server-side after the response —
-        // one more refetch a few seconds later picks it up.
-        setTimeout(refreshConversations, 4000);
-      }
+      await queryLLMStream(auth.token, conversationId, trimmed, {
+        onStart: (event) => {
+          if (isNewConversation) setConversationId(event.conversation_id);
+        },
+        onToken: appendToLastMessage,
+        onDone: (event) => {
+          setMessages((prev) => {
+            const next = [...prev];
+            next[next.length - 1] = { role: "assistant", content: event.answer, chart: event.chart, sources: event.sources };
+            return next;
+          });
+          if (isNewConversation) {
+            refreshConversations();
+            // Title generation runs async server-side after the response —
+            // one more refetch a few seconds later picks it up.
+            setTimeout(refreshConversations, 4000);
+          }
+        },
+        onError: (message) => setError(message),
+      });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Something went wrong.");
     } finally {
@@ -184,7 +239,7 @@ export default function ChatPage({ auth }) {
             </div>
           )}
 
-          <div className="messages-list">
+          <div className="messages-list" ref={messagesListRef} onScroll={handleMessagesScroll}>
             {messages.map((message, i) =>
               message.role === "user" ? (
                 <div className="user-message" key={i}>

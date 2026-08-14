@@ -44,6 +44,36 @@ def call_llm(
         return _fallback_reply(messages)
 
 
+def stream_llm(
+    messages: list[dict[str, str]],
+    *,
+    model: str | None = None,
+    temperature: float | None = None,
+):
+    """Sends a conversation to the configured AI language model and yields
+    its text reply incrementally as chunks arrive, instead of waiting for
+    the full response like call_llm does.
+    """
+    kwargs = {}
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+
+    yielded_any = False
+    try:
+        llm = ChatNVIDIA(model=model or settings.LLM_MODEL, **kwargs)
+        for chunk in llm.stream(_to_chat_messages(messages)):
+            if chunk.content:
+                yielded_any = True
+                yield chunk.content
+    except Exception as exc:
+        logger.warning("NVIDIA streaming chat completion failed for %s: %s", model or settings.LLM_MODEL, exc)
+        # Only fall back if the failure happened before any real content
+        # went out — once tokens have already reached the client, silently
+        # appending the fallback sentence would just garble the answer.
+        if not yielded_any:
+            yield _fallback_reply(messages)
+
+
 def _fallback_reply(messages: list[dict[str, str]]) -> str:
     """Return a safe deterministic reply when the hosted model is unavailable.
 

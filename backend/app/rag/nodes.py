@@ -81,6 +81,18 @@ def check_ambiguity_node(state: RAGState) -> dict:
     return {"needs_clarification": verdict.startswith("yes")}
 
 
+def clarification_messages(state: RAGState) -> list[dict]:
+    """Builds the prompt for generate_clarification_node. Pulled out on its
+    own so app/rag/streaming.py can reuse the exact same prompt while
+    streaming the reply token by token instead of calling call_llm.
+    """
+    question = state.get("condensed_query") or state["query"]
+    return [
+        {"role": "system", "content": GENERATE_CLARIFICATION_PROMPT},
+        {"role": "user", "content": f"Question: {question}\n\nRetrieved context:\n{_context_text(state)}"},
+    ]
+
+
 def generate_clarification_node(state: RAGState) -> dict:
     """Only reached (via graph routing) when check_ambiguity_node said yes.
     Asks the user which of the matching entities they meant instead of
@@ -88,16 +100,14 @@ def generate_clarification_node(state: RAGState) -> dict:
     search query by condense_query_node's normal history handling, so no
     extra state needs to be tracked across turns.
     """
-    question = state.get("condensed_query") or state["query"]
-    messages = [
-        {"role": "system", "content": GENERATE_CLARIFICATION_PROMPT},
-        {"role": "user", "content": f"Question: {question}\n\nRetrieved context:\n{_context_text(state)}"},
-    ]
-    return {"answer": call_llm(messages).strip()}
+    return {"answer": call_llm(clarification_messages(state)).strip()}
 
 
-def generate_answer_node(state: RAGState) -> dict:
-    """Asks the AI model to write an answer to the user's question using only the retrieved document chunks (and recent chat history) as its source material."""
+def answer_messages(state: RAGState) -> list[dict]:
+    """Builds the prompt for generate_answer_node. Pulled out on its own so
+    app/rag/streaming.py can reuse the exact same prompt while streaming the
+    reply token by token instead of calling call_llm.
+    """
     context = _context_text(state)
     question = state.get("condensed_query") or state["query"]
 
@@ -107,8 +117,12 @@ def generate_answer_node(state: RAGState) -> dict:
             {"role": "system", "content": f"Recent conversation history:\n{_format_history(state['history'])}"}
         )
     messages.append({"role": "user", "content": f"Context:\n\n{context}\n\nQuestion: {question}"})
+    return messages
 
-    return {"answer": call_llm(messages).strip()}
+
+def generate_answer_node(state: RAGState) -> dict:
+    """Asks the AI model to write an answer to the user's question using only the retrieved document chunks (and recent chat history) as its source material."""
+    return {"answer": call_llm(answer_messages(state)).strip()}
 
 
 def should_chart_node(state: RAGState) -> dict:
