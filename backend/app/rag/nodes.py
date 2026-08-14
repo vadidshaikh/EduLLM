@@ -223,12 +223,13 @@ def save_messages_node(state: RAGState) -> dict:
 
 def generate_title_node(state: dict) -> dict:
     """Standalone node (not wired into the main graph — see app/rag/title.py)
-    invoked as a background task after the response is already sent, so
-    title generation never blocks the user's answer.
+    run on its own thread in parallel with the main answer pipeline, from
+    just the user's first message, so it doesn't need to wait for (or
+    block) the answer.
     """
     messages = [
         {"role": "system", "content": GENERATE_TITLE_PROMPT},
-        {"role": "user", "content": f"Question: {state['first_question']}\n\nAnswer: {state['first_answer']}"},
+        {"role": "user", "content": f"First message: {state['first_question']}"},
     ]
     title = call_llm(messages, temperature=0.3).strip().strip('"').rstrip(".")
     return {"title": title[:80]}

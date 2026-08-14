@@ -185,7 +185,15 @@ export default function ChatPage({ auth }) {
     try {
       await queryLLMStream(auth.token, conversationId, trimmed, {
         onStart: (event) => {
-          if (isNewConversation) setConversationId(event.conversation_id);
+          if (isNewConversation) {
+            setConversationId(event.conversation_id);
+            // The backend starts generating this conversation's title in
+            // parallel with the answer, right when it's created — refresh
+            // now so the sidebar entry appears immediately, then once more
+            // shortly after to pick up the title once it lands.
+            refreshConversations();
+            setTimeout(refreshConversations, 1500);
+          }
         },
         onToken: appendToLastMessage,
         onDone: (event) => {
@@ -194,12 +202,6 @@ export default function ChatPage({ auth }) {
             next[next.length - 1] = { role: "assistant", content: event.answer, chart: event.chart, sources: event.sources };
             return next;
           });
-          if (isNewConversation) {
-            refreshConversations();
-            // Title generation runs async server-side after the response —
-            // one more refetch a few seconds later picks it up.
-            setTimeout(refreshConversations, 4000);
-          }
         },
         onError: (message) => setError(message),
       });

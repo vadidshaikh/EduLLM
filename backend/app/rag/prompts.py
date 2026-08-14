@@ -187,8 +187,8 @@ Rules:
 """
 
 GENERATE_TITLE_PROMPT = """\
-Given the first question a user asked and the answer they received, write a
-short chat title summarizing the topic.
+Given the first message a user sent to start a new chat, write a short
+conversation title summarizing what it's likely about.
 
 Rules:
 - 6 words or fewer.

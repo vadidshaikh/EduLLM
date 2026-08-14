@@ -1,7 +1,8 @@
 import json
 import logging
+import threading
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from app.api.schemas import QueryRequest, QueryResponse
@@ -16,16 +17,28 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _start_title_generation(conversation_id: str, query: str) -> None:
+    """Kicks off title generation on its own thread immediately, so it runs
+    concurrently with the main answer pipeline below rather than only after
+    the response finishes (which is when FastAPI's BackgroundTasks would
+    run it) — the title is then usually ready by the time the first answer
+    arrives, instead of leaving the sidebar on "New conversation" for
+    several extra seconds.
+    """
+    threading.Thread(target=run_title_generation, args=(conversation_id, query), daemon=True).start()
+
+
 @router.post("/query", response_model=QueryResponse)
-def query(
-    body: QueryRequest, background_tasks: BackgroundTasks, claims: dict = Depends(get_claims)
-) -> QueryResponse:
+def query(body: QueryRequest, claims: dict = Depends(get_claims)) -> QueryResponse:
     """Answers a user's question: runs it through the RAG pipeline to get an
     answer (with sources and an optional chart), creating a new conversation
-    if needed and generating a title for it in the background.
+    if needed and generating its title in parallel.
     """
     is_new_conversation = body.conversation_id is None
     conversation_id = body.conversation_id or create_conversation(user_email=claims["sub"])["id"]
+
+    if is_new_conversation:
+        _start_title_generation(conversation_id, body.query)
 
     result = graph.invoke(
         {
@@ -34,11 +47,6 @@ def query(
             "conversation_id": conversation_id,
         }
     )
-
-    if is_new_conversation:
-        # Runs after this response is sent — never makes the user wait on
-        # title generation before they see their answer.
-        background_tasks.add_task(run_title_generation, conversation_id, body.query, result["answer"])
 
     return QueryResponse(
         conversation_id=conversation_id,
@@ -49,9 +57,7 @@ def query(
 
 
 @router.post("/query/stream")
-def query_stream(
-    body: QueryRequest, background_tasks: BackgroundTasks, claims: dict = Depends(get_claims)
-) -> StreamingResponse:
+def query_stream(body: QueryRequest, claims: dict = Depends(get_claims)) -> StreamingResponse:
     """Same as /query, but streams the answer as newline-delimited JSON
     events instead of waiting for the full pipeline to finish:
       {"type": "start", "conversation_id": "..."}          first
@@ -62,27 +68,16 @@ def query_stream(
     is_new_conversation = body.conversation_id is None
     conversation_id = body.conversation_id or create_conversation(user_email=claims["sub"])["id"]
 
+    if is_new_conversation:
+        _start_title_generation(conversation_id, body.query)
+
     def event_stream():
         yield json.dumps({"type": "start", "conversation_id": str(conversation_id)}) + "\n"
         try:
-            final = None
             for event in run_query_stream(role=claims["role"], query=body.query, conversation_id=conversation_id):
-                if event["type"] == "done":
-                    final = event
                 yield json.dumps(event) + "\n"
         except Exception:
             logger.exception("Streaming query failed")
             yield json.dumps({"type": "error", "message": "Something went wrong."}) + "\n"
-            return
 
-        if is_new_conversation and final is not None:
-            # Runs after this response is sent — never makes the user wait
-            # on title generation before they see their answer.
-            background_tasks.add_task(run_title_generation, conversation_id, body.query, final["answer"])
-
-    response = StreamingResponse(event_stream(), media_type="application/x-ndjson")
-    # A path operation that returns a Response object directly bypasses
-    # FastAPI's normal background-task wiring, so it has to be attached here
-    # explicitly for the title-generation task above to actually run.
-    response.background = background_tasks
-    return response
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")
