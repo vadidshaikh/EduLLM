@@ -8,8 +8,10 @@ from app.rag.chart_parser import parse_chart_json
 from app.rag.llm import call_llm
 from app.rag.prompts import (
     ANSWER_SYSTEM_PROMPT,
+    CHECK_AMBIGUITY_PROMPT,
     CONDENSE_QUERY_PROMPT,
     GENERATE_CHART_PROMPT,
+    GENERATE_CLARIFICATION_PROMPT,
     GENERATE_TITLE_PROMPT,
     SHOULD_CHART_PROMPT,
 )
@@ -63,6 +65,35 @@ def retrieve_filtered_node(state: RAGState) -> dict:
     query_embedding = embed_texts([search_query])[0]
     chunks = search_chunks(role=state["role"], embedding=query_embedding, top_k=settings.TOP_K)
     return {"retrieved_chunks": chunks}
+
+
+def check_ambiguity_node(state: RAGState) -> dict:
+    """Asks the AI model whether the retrieved context contains multiple
+    distinct entities (e.g. two different people with the same name) that
+    the question's wording doesn't already distinguish between.
+    """
+    question = state.get("condensed_query") or state["query"]
+    messages = [
+        {"role": "system", "content": CHECK_AMBIGUITY_PROMPT},
+        {"role": "user", "content": f"Question: {question}\n\nRetrieved context:\n{_context_text(state)}"},
+    ]
+    verdict = call_llm(messages, temperature=0).strip().lower()
+    return {"needs_clarification": verdict.startswith("yes")}
+
+
+def generate_clarification_node(state: RAGState) -> dict:
+    """Only reached (via graph routing) when check_ambiguity_node said yes.
+    Asks the user which of the matching entities they meant instead of
+    guessing. The next user message is resolved back into a disambiguated
+    search query by condense_query_node's normal history handling, so no
+    extra state needs to be tracked across turns.
+    """
+    question = state.get("condensed_query") or state["query"]
+    messages = [
+        {"role": "system", "content": GENERATE_CLARIFICATION_PROMPT},
+        {"role": "user", "content": f"Question: {question}\n\nRetrieved context:\n{_context_text(state)}"},
+    ]
+    return {"answer": call_llm(messages).strip()}
 
 
 def generate_answer_node(state: RAGState) -> dict:

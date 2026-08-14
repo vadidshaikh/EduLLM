@@ -1,9 +1,11 @@
 from langgraph.graph import END, START, StateGraph
 
 from app.rag.nodes import (
+    check_ambiguity_node,
     condense_query_node,
     generate_answer_node,
     generate_chart_node,
+    generate_clarification_node,
     load_history_node,
     respond_node,
     retrieve_filtered_node,
@@ -24,12 +26,19 @@ def _route_after_should_chart(state: RAGState) -> str:
     return "generate_chart" if state.get("should_chart") else "respond"
 
 
+def _route_after_ambiguity_check(state: RAGState) -> str:
+    """Decides whether the retrieved context matches multiple distinct entities and needs a clarifying question first, or can go straight to answering."""
+    return "generate_clarification" if state.get("needs_clarification") else "generate_answer"
+
+
 def build_graph():
     """Wires together the question-answering flow: load history, search documents, answer, maybe chart, respond, save."""
     g = StateGraph(RAGState)
     g.add_node("load_history", load_history_node)
     g.add_node("condense_query", condense_query_node)
     g.add_node("retrieve_filtered", retrieve_filtered_node)
+    g.add_node("check_ambiguity", check_ambiguity_node)
+    g.add_node("generate_clarification", generate_clarification_node)
     g.add_node("generate_answer", generate_answer_node)
     g.add_node("should_chart", should_chart_node)
     g.add_node("generate_chart", generate_chart_node)
@@ -48,7 +57,19 @@ def build_graph():
         {"condense_query": "condense_query", "retrieve_filtered": "retrieve_filtered"},
     )
     g.add_edge("condense_query", "retrieve_filtered")
-    g.add_edge("retrieve_filtered", "generate_answer")
+    g.add_edge("retrieve_filtered", "check_ambiguity")
+
+    # If the retrieved context matches multiple distinct entities under the
+    # same name/reference (e.g. two "Jaydeep sir"s), ask which one the user
+    # means instead of guessing. The clarifying question is just another
+    # assistant message, so the user's reply resolves it via the normal
+    # condense_query history handling on the next turn.
+    g.add_conditional_edges(
+        "check_ambiguity",
+        _route_after_ambiguity_check,
+        {"generate_clarification": "generate_clarification", "generate_answer": "generate_answer"},
+    )
+    g.add_edge("generate_clarification", "respond")
 
     # Chart inclusion is decided by a dedicated classifier, not a
     # side-instruction inside generate_answer's prompt (that was the root

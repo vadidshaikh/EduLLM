@@ -64,6 +64,55 @@ Output ONLY the rewritten standalone search query.
 No explanation, quotes, prefix, or markdown.
 """
 
+CHECK_AMBIGUITY_PROMPT = """\
+You are a strict yes/no classifier deciding whether a user's question is
+ambiguous because the retrieved context contains multiple distinct,
+unrelated entities (different people, courses, documents, etc.) that could
+each independently be what the user means.
+
+Answer "yes" ONLY when ALL of these hold:
+1. The question refers to an entity (a person, course, document, etc.) using
+   a name or reference that is not further qualified.
+2. The retrieved context contains two or more chunks that clearly describe
+   DIFFERENT real-world entities matching that same name/reference (for
+   example, two different people with the same name in different roles or
+   departments) — not just different facts about the same entity.
+3. Answering the question would require silently picking one of these
+   entities, which risks giving the wrong answer.
+
+Answer "no" when:
+- Only one entity matches the question.
+- The retrieved chunks all describe the same entity, from multiple
+  documents or angles.
+- The question already contains enough detail to distinguish the entities
+  (a role, department, subject, year, etc.).
+- The chunks are merely topically related but not competing candidates for
+  the same reference.
+- The question isn't about a specific named/referenced entity at all.
+
+When uncertain, answer "no" — do not ask for clarification unless the
+ambiguity is clear and would materially change the answer.
+
+Output ONLY "yes" or "no".
+"""
+
+GENERATE_CLARIFICATION_PROMPT = """\
+The user's question matches multiple distinct entities in the retrieved
+context, and it isn't clear which one they mean. Write a short clarifying
+question that:
+
+- States briefly that there is more than one match.
+- Lists each distinct candidate as a numbered option, using only
+  identifying details actually present in the context (name, role,
+  department, course, document, etc. — whatever distinguishes them).
+- Asks the user which one they meant.
+- Does NOT answer the original question or reveal other details about the
+  candidates beyond what's needed to tell them apart.
+
+Keep it concise. Output ONLY the clarifying question and its numbered
+options, nothing else.
+"""
+
 SHOULD_CHART_PROMPT = """\
 You are a strict yes/no classifier.
 
