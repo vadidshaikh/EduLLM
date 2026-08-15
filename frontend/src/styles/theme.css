@@ -932,6 +932,8 @@ table.documents-table td {
 
 .pill.status-indexed {
   color: var(--success);
+  min-width: 6.5rem;
+  text-align: center;
 }
 
 .pill.status-failed {
