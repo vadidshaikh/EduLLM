@@ -2,7 +2,7 @@ import { useState } from "react";
 
 /**
  * Shows a table of uploaded documents with a rename control, classified
- * toggle, status, version and upload date, plus a delete button for each.
+ * toggle, status and upload date, plus a delete button for each.
  */
 export default function DocumentsTable({
   documents,
@@ -39,7 +39,6 @@ export default function DocumentsTable({
         <col className="col-title" />
         <col className="col-classified" />
         <col className="col-status" />
-        <col className="col-version" />
         <col className="col-uploaded" />
         <col className="col-actions" />
       </colgroup>
@@ -48,7 +47,6 @@ export default function DocumentsTable({
           <th>Title</th>
           <th>Classified</th>
           <th>Status</th>
-          <th>Version</th>
           <th>Uploaded</th>
           <th></th>
         </tr>
@@ -76,7 +74,6 @@ export default function DocumentsTable({
               <td>
                 <StatusCell status={doc.status} progress={doc.progress} />
               </td>
-              <td>{doc.version}</td>
               <td className="uploaded-cell">
                 {new Date(doc.uploaded_at).toLocaleString(undefined, {
                   dateStyle: "short",
@@ -112,11 +109,11 @@ function StatusCell({ status, progress }) {
   if (status === "queued" || status === "processing") {
     const pct = Math.max(0, Math.min(100, progress ?? 0));
     return (
-      <div className="status-progress" title={`${status} - ${pct}%`}>
-        <div className="status-progress-bar">
-          <div className="status-progress-fill" style={{ width: `${pct}%` }} />
-        </div>
-        <span className="status-progress-label">{pct}%</span>
+      <div className="status-progress-bar" title={`${status} - ${pct}%`}>
+        <div className="status-progress-fill" style={{ width: `${pct}%` }} />
+        <span className="status-progress-label">
+          {status} {pct}%
+        </span>
       </div>
     );
   }

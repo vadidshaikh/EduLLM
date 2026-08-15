@@ -871,11 +871,7 @@ table.documents-table .col-classified {
 }
 
 table.documents-table .col-status {
-  width: 12%;
-}
-
-table.documents-table .col-version {
-  width: 8%;
+  width: 18%;
 }
 
 table.documents-table .col-uploaded {
@@ -947,16 +943,10 @@ table.documents-table td {
   color: var(--text-muted);
 }
 
-.status-progress {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
 .status-progress-bar {
-  flex: 1;
-  min-width: 3.5rem;
-  height: 0.4rem;
+  position: relative;
+  min-width: 6.5rem;
+  height: 1.1rem;
   border-radius: 999px;
   background: var(--surface-raised);
   border: 1px solid var(--border);
@@ -971,11 +961,16 @@ table.documents-table td {
 }
 
 .status-progress-label {
-  font-size: 0.72rem;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
   font-family: var(--font-mono);
-  color: var(--text-muted);
-  min-width: 2rem;
-  text-align: right;
+  color: var(--text);
+  text-transform: capitalize;
+  pointer-events: none;
 }
 
 .login-container {
