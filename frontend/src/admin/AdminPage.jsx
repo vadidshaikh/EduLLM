@@ -44,6 +44,16 @@ export default function AdminPage({ auth }) {
     refresh();
   }, [refresh]);
 
+  // While a document is still being indexed in the background, poll for its
+  // progress so the status pill/progress bar update without a manual reload.
+  useEffect(() => {
+    const hasActiveJob = documents.some((doc) => doc.status === "queued" || doc.status === "processing");
+    if (!hasActiveJob) return undefined;
+
+    const id = setInterval(refresh, 2000);
+    return () => clearInterval(id);
+  }, [documents, refresh]);
+
   /**
    * Uploads either one file (with the provided title) or multiple files
    * (each titled from its own filename), then refreshes once at the end.

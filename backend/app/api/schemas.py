@@ -63,6 +63,7 @@ class DocumentOut(BaseModel):
     title: str
     allowed_roles: list[str]
     status: str
+    progress: int
     version: int
     uploaded_at: datetime
 

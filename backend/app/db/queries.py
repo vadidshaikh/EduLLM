@@ -43,7 +43,7 @@ def insert_document(
                 """
                 UPDATE documents
                 SET filename = %s, storage_path = %s, allowed_roles = %s,
-                    file_hash = %s, status = 'queued', version = %s,
+                    file_hash = %s, status = 'queued', progress = 0, version = %s,
                     uploaded_by = %s, updated_at = now()
                 WHERE id = %s
                 RETURNING *
@@ -133,12 +133,33 @@ def update_document_title(document_id: UUID, title: str) -> dict[str, Any] | Non
         return row
 
 
-def update_document_status(document_id: UUID, status: str) -> None:
-    """Updates a document's processing status (e.g. queued, processing, indexed, failed)."""
+def update_document_status(document_id: UUID, status: str, progress: int | None = None) -> None:
+    """Updates a document's processing status (e.g. queued, processing, indexed,
+    failed), and optionally its progress percentage in the same write.
+    """
+    with pool.connection() as conn:
+        if progress is None:
+            conn.execute(
+                "UPDATE documents SET status = %s, updated_at = now() WHERE id = %s",
+                (status, document_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE documents SET status = %s, progress = %s, updated_at = now() WHERE id = %s",
+                (status, progress, document_id),
+            )
+        conn.commit()
+
+
+def update_document_progress(document_id: UUID, progress: int) -> None:
+    """Updates only a document's progress percentage (0-100), without touching
+    its status. Used to report incremental progress during embedding, the
+    slowest step of ingestion for large documents.
+    """
     with pool.connection() as conn:
         conn.execute(
-            "UPDATE documents SET status = %s, updated_at = now() WHERE id = %s",
-            (status, document_id),
+            "UPDATE documents SET progress = %s, updated_at = now() WHERE id = %s",
+            (progress, document_id),
         )
         conn.commit()
 

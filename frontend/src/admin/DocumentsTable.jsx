@@ -74,7 +74,7 @@ export default function DocumentsTable({
                 </label>
               </td>
               <td>
-                <span className={`pill status-${doc.status}`}>{doc.status}</span>
+                <StatusCell status={doc.status} progress={doc.progress} />
               </td>
               <td>{doc.version}</td>
               <td className="uploaded-cell">
@@ -101,6 +101,27 @@ export default function DocumentsTable({
       </tbody>
     </table>
   );
+}
+
+/**
+ * Shows a document's indexing status. While it's queued or actively being
+ * processed, shows a progress bar with a percentage instead of just the bare
+ * status word, so a long-running upload doesn't look stuck.
+ */
+function StatusCell({ status, progress }) {
+  if (status === "queued" || status === "processing") {
+    const pct = Math.max(0, Math.min(100, progress ?? 0));
+    return (
+      <div className="status-progress" title={`${status} - ${pct}%`}>
+        <div className="status-progress-bar">
+          <div className="status-progress-fill" style={{ width: `${pct}%` }} />
+        </div>
+        <span className="status-progress-label">{pct}%</span>
+      </div>
+    );
+  }
+
+  return <span className={`pill status-${status}`}>{status}</span>;
 }
 
 /**

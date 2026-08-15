@@ -13,11 +13,15 @@ CREATE TABLE IF NOT EXISTS documents (
     allowed_roles TEXT[] NOT NULL,
     file_hash TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'queued',
+    progress INT NOT NULL DEFAULT 0,
     version INT NOT NULL DEFAULT 1,
     uploaded_by TEXT NOT NULL,
     uploaded_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
+
+ALTER TABLE documents
+    ADD COLUMN IF NOT EXISTS progress INT NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS chunks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
