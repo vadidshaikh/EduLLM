@@ -8,7 +8,6 @@ class RAGState(TypedDict, total=False):
     history: list[dict[str, Any]]
     condensed_query: str
     retrieved_chunks: list[dict[str, Any]]
-    needs_clarification: bool
     answer: str
     should_chart: bool
     chart: dict[str, Any] | None
