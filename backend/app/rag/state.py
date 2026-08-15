@@ -12,3 +12,5 @@ class RAGState(TypedDict, total=False):
     should_chart: bool
     chart: dict[str, Any] | None
     sources: list[dict[str, Any]]
+    user_message_id: Any
+    assistant_message_id: Any

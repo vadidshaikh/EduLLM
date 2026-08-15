@@ -346,13 +346,33 @@ def get_messages(conversation_id: UUID) -> list[dict[str, Any]]:
     with pool.connection() as conn:
         return conn.execute(
             """
-            SELECT role, content, chart_config, sources, created_at
+            SELECT id, role, content, chart_config, sources, created_at
             FROM messages
             WHERE conversation_id = %s
             ORDER BY created_at ASC
             """,
             (conversation_id,),
         ).fetchall()
+
+
+def get_message(message_id: UUID) -> dict[str, Any] | None:
+    """Looks up a single message's details by its ID."""
+    with pool.connection() as conn:
+        return conn.execute("SELECT * FROM messages WHERE id = %s", (message_id,)).fetchone()
+
+
+def delete_messages_from(conversation_id: UUID, from_created_at: datetime) -> None:
+    """Deletes a message and everything sent after it in the conversation, by
+    timestamp. Used when an earlier question is edited: the old answer (and
+    any later turns building on it) are no longer valid once the question
+    changes.
+    """
+    with pool.connection() as conn:
+        conn.execute(
+            "DELETE FROM messages WHERE conversation_id = %s AND created_at >= %s",
+            (conversation_id, from_created_at),
+        )
+        conn.commit()
 
 
 def get_recent_messages(conversation_id: UUID, limit: int) -> list[dict[str, Any]]:

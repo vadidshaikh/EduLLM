@@ -42,6 +42,21 @@ def delete_conversation(conversation_id: UUID, claims: dict = Depends(get_claims
     queries.delete_conversation(conversation_id)
 
 
+@router.delete("/conversations/{conversation_id}/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_messages_from(conversation_id: UUID, message_id: UUID, claims: dict = Depends(get_claims)) -> None:
+    """Deletes a message and everything sent after it in the conversation.
+    Used when the user edits an earlier question: the old answer (and any
+    later turns built on it) no longer apply once the question changes.
+    """
+    _owned_conversation(conversation_id, claims["sub"])
+
+    message = queries.get_message(message_id)
+    if message is None or message["conversation_id"] != conversation_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "message not found")
+
+    queries.delete_messages_from(conversation_id, message["created_at"])
+
+
 @router.patch("/conversations/{conversation_id}", response_model=ConversationOut)
 def update_conversation(
     conversation_id: UUID,

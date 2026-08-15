@@ -124,6 +124,15 @@ export function deleteConversation(token, conversationId) {
 }
 
 /**
+ * Deletes a message and everything sent after it in the conversation — used
+ * when editing an earlier question, since the old answer (and anything
+ * after it) is no longer valid once the question changes.
+ */
+export function deleteMessagesFrom(token, conversationId, messageId) {
+  return request(`/conversations/${conversationId}/messages/${messageId}`, { method: "DELETE", token });
+}
+
+/**
  * Renames a conversation and/or updates its pinned state.
  */
 export function updateConversation(token, conversationId, { title, isPinned }) {

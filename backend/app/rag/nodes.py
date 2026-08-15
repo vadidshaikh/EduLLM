@@ -171,8 +171,8 @@ def respond_node(state: RAGState) -> dict:
 def save_messages_node(state: RAGState) -> dict:
     """Saves the user's question and the assistant's answer to the conversation history in the database."""
     conversation_id = state["conversation_id"]
-    insert_message(conversation_id=conversation_id, role="user", content=state["query"])
-    insert_message(
+    user_message = insert_message(conversation_id=conversation_id, role="user", content=state["query"])
+    assistant_message = insert_message(
         conversation_id=conversation_id,
         role="assistant",
         content=state["answer"],
@@ -180,7 +180,7 @@ def save_messages_node(state: RAGState) -> dict:
         sources=state.get("sources"),
     )
     touch_conversation(conversation_id)
-    return {}
+    return {"user_message_id": user_message["id"], "assistant_message_id": assistant_message["id"]}
 
 
 def generate_title_node(state: dict) -> dict:

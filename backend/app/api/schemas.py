@@ -35,6 +35,7 @@ class UpdateConversationRequest(BaseModel):
 
 
 class MessageOut(BaseModel):
+    id: UUID
     role: str
     content: str
     chart_config: dict[str, Any] | None

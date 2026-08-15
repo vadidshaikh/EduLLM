@@ -4,6 +4,7 @@ import {
   listConversations,
   getConversationMessages,
   deleteConversation,
+  deleteMessagesFrom,
   updateConversation,
   ApiError,
 } from "../api/client";
@@ -19,7 +20,7 @@ const AUTO_SCROLL_THRESHOLD_PX = 80;
  * Converts a message loaded from a saved conversation into the message format used for display.
  */
 function mapStoredMessage(message) {
-  return { role: message.role, content: message.content, chart: message.chart_config, sources: message.sources };
+  return { id: message.id, role: message.role, content: message.content, chart: message.chart_config, sources: message.sources };
 }
 
 /**
@@ -32,6 +33,9 @@ export default function ChatPage({ auth }) {
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [editingMessageId, setEditingMessageId] = useState(null);
+  const [editingValue, setEditingValue] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
   const textareaRef = useRef(null);
   const messagesListRef = useRef(null);
   // A ref (not state) because the scroll handler needs the latest value
@@ -162,13 +166,11 @@ export default function ChatPage({ auth }) {
   }
 
   /**
-   * Sends the typed question to the AI and streams the answer into the chat as it's generated, starting a new conversation entry if needed.
+   * Sends a question to the AI and streams the answer into the chat as it's
+   * generated, starting a new conversation entry if needed. Shared by the
+   * query box and by saving a message edit.
    */
-  async function handleSubmit(e) {
-    e.preventDefault();
-    const trimmed = query.trim();
-    if (!trimmed || loading) return;
-
+  async function sendQuery(trimmed) {
     setLoading(true);
     setError("");
     // The user just sent a message — always follow the reply as it streams
@@ -179,7 +181,6 @@ export default function ChatPage({ auth }) {
       { role: "user", content: trimmed },
       { role: "assistant", content: "", chart: null, sources: [] },
     ]);
-    setQuery("");
 
     const isNewConversation = conversationId === null;
     try {
@@ -199,7 +200,18 @@ export default function ChatPage({ auth }) {
         onDone: (event) => {
           setMessages((prev) => {
             const next = [...prev];
-            next[next.length - 1] = { role: "assistant", content: event.answer, chart: event.chart, sources: event.sources };
+            const assistantIndex = next.length - 1;
+            const userIndex = assistantIndex - 1;
+            next[assistantIndex] = {
+              id: event.assistant_message_id,
+              role: "assistant",
+              content: event.answer,
+              chart: event.chart,
+              sources: event.sources,
+            };
+            if (userIndex >= 0 && next[userIndex].role === "user") {
+              next[userIndex] = { ...next[userIndex], id: event.user_message_id };
+            }
             return next;
           });
         },
@@ -209,6 +221,58 @@ export default function ChatPage({ auth }) {
       setError(err instanceof ApiError ? err.message : "Something went wrong.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  /**
+   * Sends the typed question to the AI, clearing the input box first.
+   */
+  async function handleSubmit(e) {
+    e.preventDefault();
+    const trimmed = query.trim();
+    if (!trimmed || loading) return;
+    setQuery("");
+    await sendQuery(trimmed);
+  }
+
+  /**
+   * Starts editing a previously-sent message in place.
+   */
+  function startEditMessage(message) {
+    if (!message.id || loading || editSaving) return;
+    setEditingMessageId(message.id);
+    setEditingValue(message.content);
+  }
+
+  /**
+   * Cancels an in-progress message edit without saving it.
+   */
+  function cancelEditMessage() {
+    setEditingMessageId(null);
+    setEditingValue("");
+  }
+
+  /**
+   * Saves an edited message: drops it and everything that followed it (both
+   * on the backend and locally, since the old answer no longer applies),
+   * then re-asks the corrected question.
+   */
+  async function submitEditMessage(index) {
+    const message = messages[index];
+    const trimmed = editingValue.trim();
+    if (!message?.id || !trimmed || editSaving || loading) return;
+
+    setEditSaving(true);
+    try {
+      await deleteMessagesFrom(auth.token, conversationId, message.id);
+      setMessages((prev) => prev.slice(0, index));
+      setEditingMessageId(null);
+      setEditingValue("");
+      await sendQuery(trimmed);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't save that edit.");
+    } finally {
+      setEditSaving(false);
     }
   }
 
@@ -242,15 +306,55 @@ export default function ChatPage({ auth }) {
           )}
 
           <div className="messages-list" ref={messagesListRef} onScroll={handleMessagesScroll}>
-            {messages.map((message, i) =>
-              message.role === "user" ? (
-                <div className="user-message" key={i}>
-                  {message.content}
-                </div>
-              ) : (
-                <AnswerBlock message={message} key={i} />
-              )
-            )}
+            <div className="messages-inner">
+              {messages.map((message, i) =>
+                message.role === "user" ? (
+                  editingMessageId === message.id ? (
+                    <div className="user-message-editing" key={i}>
+                      <textarea
+                        className="input user-message-edit-input"
+                        value={editingValue}
+                        onChange={(e) => setEditingValue(e.target.value)}
+                        disabled={editSaving}
+                        autoFocus
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            submitEditMessage(i);
+                          }
+                          if (e.key === "Escape") cancelEditMessage();
+                        }}
+                      />
+                      <div className="user-message-edit-actions">
+                        <button type="button" className="btn-secondary btn" disabled={editSaving} onClick={cancelEditMessage}>
+                          Cancel
+                        </button>
+                        <button type="button" className="btn" disabled={editSaving} onClick={() => submitEditMessage(i)}>
+                          {editSaving ? "Saving..." : "Save"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="user-message-row" key={i}>
+                      {message.id && (
+                        <button
+                          type="button"
+                          className="user-message-edit-trigger"
+                          title="Edit message"
+                          disabled={loading}
+                          onClick={() => startEditMessage(message)}
+                        >
+                          <img className="user-message-edit-icon" src="/rename.png" alt="Edit" />
+                        </button>
+                      )}
+                      <div className="user-message">{message.content}</div>
+                    </div>
+                  )
+                ) : (
+                  <AnswerBlock message={message} key={i} />
+                )
+              )}
+            </div>
           </div>
 
           <form className="query-form" onSubmit={handleSubmit}>

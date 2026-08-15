@@ -31,7 +31,8 @@ def run_query_stream(*, role: str, query: str, conversation_id: str) -> Iterator
 
     Yields dicts describing what happened, in order:
       - {"type": "token", "text": str}                             zero or more
-      - {"type": "done", "answer", "chart", "sources"}              exactly one, last
+      - {"type": "done", "answer", "chart", "sources",
+         "user_message_id", "assistant_message_id"}                exactly one, last
     """
     state: RAGState = {"role": role, "query": query, "conversation_id": conversation_id}
 
@@ -54,11 +55,13 @@ def run_query_stream(*, role: str, query: str, conversation_id: str) -> Iterator
         state.update(validate_chart_data_node(state))
 
     state.update(respond_node(state))
-    save_messages_node(state)
+    state.update(save_messages_node(state))
 
     yield {
         "type": "done",
         "answer": state["answer"],
         "chart": state.get("chart"),
         "sources": state.get("sources", []),
+        "user_message_id": str(state["user_message_id"]),
+        "assistant_message_id": str(state["assistant_message_id"]),
     }
