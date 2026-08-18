@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -10,6 +11,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _REPO_ROOT_ENV = Path(__file__).resolve().parent.parent.parent / ".env"
 if _REPO_ROOT_ENV.exists():
     load_dotenv(_REPO_ROOT_ENV)
+
+print("Tracing:", os.getenv("LANGSMITH_TRACING"))
+print("Project:", os.getenv("LANGSMITH_PROJECT"))
+print("Endpoint:", os.getenv("LANGSMITH_ENDPOINT"))
+print("API key exists:", bool(os.getenv("LANGSMITH_API_KEY")))
 
 
 class Settings(BaseSettings):
