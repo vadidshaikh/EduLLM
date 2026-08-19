@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from functools import lru_cache
 
+from langsmith import traceable
 from sentence_transformers import SentenceTransformer
 
 from app.config import settings
@@ -14,6 +15,19 @@ def _model() -> SentenceTransformer:
     return SentenceTransformer(settings.EMBEDDING_MODEL)
 
 
+@traceable(
+    name="embed_chunks",
+    run_type="tool",
+    tags=["ingestion", "embedding"],
+    # on_progress is a callback, not data - and the embedding vectors
+    # themselves are large and not human-readable, so log shape instead of
+    # the raw floats.
+    process_inputs=lambda inputs: {"chunk_count": len(inputs.get("texts", []))},
+    process_outputs=lambda output: {
+        "embedded_count": len(output),
+        "dims": len(output[0]) if output else 0,
+    },
+)
 def embed_texts(texts: list[str], on_progress: Callable[[int, int], None] | None = None) -> list[list[float]]:
     """Converts a list of text passages into numeric vectors that capture their
     meaning, so they can be compared or searched by similarity.

@@ -4,6 +4,7 @@ from app.rag.nodes import (
     condense_query_node,
     generate_answer_node,
     generate_chart_node,
+    generate_title_node,
     load_history_node,
     respond_node,
     retrieve_filtered_node,
@@ -12,11 +13,6 @@ from app.rag.nodes import (
     validate_chart_data_node,
 )
 from app.rag.state import RAGState
-
-
-def _route_after_history(state: RAGState) -> str:
-    """Decides whether to rewrite the question using conversation history, or skip straight to searching documents."""
-    return "condense_query" if state.get("history") else "retrieve_filtered"
 
 
 def _route_after_should_chart(state: RAGState) -> str:
@@ -28,6 +24,7 @@ def build_graph():
     """Wires together the question-answering flow: load history, search documents, answer, maybe chart, respond, save."""
     g = StateGraph(RAGState)
     g.add_node("load_history", load_history_node)
+    g.add_node("generate_title", generate_title_node)
     g.add_node("condense_query", condense_query_node)
     g.add_node("retrieve_filtered", retrieve_filtered_node)
     g.add_node("generate_answer", generate_answer_node)
@@ -44,9 +41,10 @@ def build_graph():
     # when there's history to condense against.
     g.add_conditional_edges(
         "load_history",
-        _route_after_history,
-        {"condense_query": "condense_query", "retrieve_filtered": "retrieve_filtered"},
+        lambda state: "condense_query" if state.get("history") else "generate_title",
+        {"condense_query": "condense_query", "generate_title": "generate_title"},
     )
+    g.add_edge("generate_title", "retrieve_filtered")
     g.add_edge("condense_query", "retrieve_filtered")
     g.add_edge("retrieve_filtered", "generate_answer")
 

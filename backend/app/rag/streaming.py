@@ -1,67 +1,45 @@
 from collections.abc import Iterator
 from typing import Any
 
-from app.rag.llm import stream_llm
-from app.rag.nodes import (
-    answer_messages,
-    condense_query_node,
-    generate_chart_node,
-    load_history_node,
-    respond_node,
-    retrieve_filtered_node,
-    save_messages_node,
-    should_chart_node,
-    validate_chart_data_node,
-)
-from app.rag.state import RAGState
+from app.rag.graph import graph
+from app.tracing import conversation_trace_config
 
 
 def run_query_stream(*, role: str, query: str, conversation_id: str) -> Iterator[dict[str, Any]]:
-    """Runs the same pipeline as the compiled graph (see app/rag/graph.py),
-    except the final answer text is streamed token by token instead of
-    produced in one blocking call.
-
-    This intentionally re-runs the pipeline step by step outside of
-    graph.invoke() rather than trying to get token-level output out of the
-    compiled StateGraph: only the answer is meant to reach the user live,
-    and every other node (chart classification, chart generation) must
-    still run to completion first/after. Duplicating that ordering here is
-    simpler and more explicit than filtering LangGraph's internal per-node
-    token stream down to just the one node we care about.
+    """Runs the question through the same compiled graph as app/rag/graph.py
+    (so LangSmith traces this as one real LangGraph run, with the proper
+    node-graph structure, instead of a hand-rolled chain), streaming the
+    answer token by token as generate_answer_node emits them via
+    LangGraph's custom stream writer.
 
     Yields dicts describing what happened, in order:
       - {"type": "token", "text": str}                             zero or more
       - {"type": "done", "answer", "chart", "sources",
          "user_message_id", "assistant_message_id"}                exactly one, last
     """
-    state: RAGState = {"role": role, "query": query, "conversation_id": conversation_id}
+    initial_state = {
+        "role": role,
+        "query": query,
+        "conversation_id": conversation_id,
+        "messages": [{"role": "user", "content": query}],
+    }
 
-    state.update(load_history_node(state))
-    if state.get("history"):
-        state.update(condense_query_node(state))
-    state.update(retrieve_filtered_node(state))
-
-    messages = answer_messages(state)
-
-    chunks: list[str] = []
-    for chunk in stream_llm(messages):
-        chunks.append(chunk)
-        yield {"type": "token", "text": chunk}
-    state["answer"] = "".join(chunks).strip()
-
-    state.update(should_chart_node(state))
-    if state["should_chart"]:
-        state.update(generate_chart_node(state))
-        state.update(validate_chart_data_node(state))
-
-    state.update(respond_node(state))
-    state.update(save_messages_node(state))
+    final_state: dict[str, Any] = {}
+    for stream_mode, payload in graph.stream(
+        initial_state,
+        config=conversation_trace_config(conversation_id),
+        stream_mode=["custom", "values"],
+    ):
+        if stream_mode == "custom":
+            yield payload
+        else:
+            final_state = payload
 
     yield {
         "type": "done",
-        "answer": state["answer"],
-        "chart": state.get("chart"),
-        "sources": state.get("sources", []),
-        "user_message_id": str(state["user_message_id"]),
-        "assistant_message_id": str(state["assistant_message_id"]),
+        "answer": final_state["answer"],
+        "chart": final_state.get("chart"),
+        "sources": final_state.get("sources", []),
+        "user_message_id": str(final_state["user_message_id"]),
+        "assistant_message_id": str(final_state["assistant_message_id"]),
     }

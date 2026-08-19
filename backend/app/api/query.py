@@ -1,6 +1,5 @@
 import json
 import logging
-import threading
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -10,42 +9,29 @@ from app.auth.dependencies import get_claims
 from app.db.queries import create_conversation
 from app.rag.graph import graph
 from app.rag.streaming import run_query_stream
-from app.rag.title import run_title_generation
+from app.tracing import conversation_trace_config
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-def _start_title_generation(conversation_id: str, query: str) -> None:
-    """Kicks off title generation on its own thread immediately, so it runs
-    concurrently with the main answer pipeline below rather than only after
-    the response finishes (which is when FastAPI's BackgroundTasks would
-    run it) — the title is then usually ready by the time the first answer
-    arrives, instead of leaving the sidebar on "New conversation" for
-    several extra seconds.
-    """
-    threading.Thread(target=run_title_generation, args=(conversation_id, query), daemon=True).start()
-
-
 @router.post("/query", response_model=QueryResponse)
 def query(body: QueryRequest, claims: dict = Depends(get_claims)) -> QueryResponse:
     """Answers a user's question: runs it through the RAG pipeline to get an
     answer (with sources and an optional chart), creating a new conversation
-    if needed and generating its title in parallel.
+    if needed and generating its title inside the same trace.
     """
-    is_new_conversation = body.conversation_id is None
     conversation_id = body.conversation_id or create_conversation(user_email=claims["sub"])["id"]
-
-    if is_new_conversation:
-        _start_title_generation(conversation_id, body.query)
 
     result = graph.invoke(
         {
             "role": claims["role"],
             "query": body.query,
             "conversation_id": conversation_id,
-        }
+            "messages": [{"role": "user", "content": body.query}],
+        },
+        config=conversation_trace_config(str(conversation_id)),
     )
 
     return QueryResponse(
@@ -65,16 +51,16 @@ def query_stream(body: QueryRequest, claims: dict = Depends(get_claims)) -> Stre
       {"type": "done", "answer", "chart", "sources"}        last, on success
       {"type": "error", "message": "..."}                   last, on failure
     """
-    is_new_conversation = body.conversation_id is None
     conversation_id = body.conversation_id or create_conversation(user_email=claims["sub"])["id"]
-
-    if is_new_conversation:
-        _start_title_generation(conversation_id, body.query)
 
     def event_stream():
         yield json.dumps({"type": "start", "conversation_id": str(conversation_id)}) + "\n"
         try:
-            for event in run_query_stream(role=claims["role"], query=body.query, conversation_id=conversation_id):
+            for event in run_query_stream(
+                role=claims["role"],
+                query=body.query,
+                conversation_id=str(conversation_id),
+            ):
                 yield json.dumps(event) + "\n"
         except Exception:
             logger.exception("Streaming query failed")

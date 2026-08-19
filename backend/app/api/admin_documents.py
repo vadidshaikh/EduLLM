@@ -8,6 +8,7 @@ from app.auth.dependencies import require_faculty
 from app.db import queries
 from app.ingestion.pipeline import run_ingestion
 from app.storage import compute_file_hash, save_upload_file
+from app.tracing import document_trace_extra
 
 router = APIRouter()
 
@@ -42,7 +43,11 @@ async def upload_document(
         uploaded_by=claims["sub"],
     )
 
-    background_tasks.add_task(run_ingestion, document["id"])
+    background_tasks.add_task(
+        run_ingestion,
+        document["id"],
+        langsmith_extra=document_trace_extra(document["id"], title),
+    )
     return UploadResponse(document_id=document["id"], status=document["status"])
 
 

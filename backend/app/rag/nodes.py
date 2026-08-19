@@ -1,11 +1,19 @@
 import logging
 import re
 
+from langgraph.config import get_stream_writer
+
 from app.config import settings
-from app.db.queries import get_recent_messages, insert_message, search_chunks, touch_conversation
+from app.db.queries import (
+    get_recent_messages,
+    insert_message,
+    search_chunks,
+    touch_conversation,
+    update_conversation_title,
+)
 from app.ingestion.embedder import embed_texts
 from app.rag.chart_parser import parse_chart_json
-from app.rag.llm import call_llm
+from app.rag.llm import call_llm, stream_llm
 from app.rag.prompts import (
     ANSWER_SYSTEM_PROMPT,
     CONDENSE_QUERY_PROMPT,
@@ -83,8 +91,19 @@ def answer_messages(state: RAGState) -> list[dict]:
 
 
 def generate_answer_node(state: RAGState) -> dict:
-    """Asks the AI model to write an answer to the user's question using only the retrieved document chunks (and recent chat history) as its source material."""
-    return {"answer": call_llm(answer_messages(state)).strip()}
+    """Asks the AI model to write an answer to the user's question using only
+    the retrieved document chunks (and recent chat history) as its source
+    material. Streams tokens out via LangGraph's custom stream writer as
+    they arrive; get_stream_writer() is a no-op when nobody is consuming
+    "custom" stream events (e.g. plain graph.invoke), so this is safe for
+    both the streaming and non-streaming endpoints.
+    """
+    writer = get_stream_writer()
+    chunks: list[str] = []
+    for chunk in stream_llm(answer_messages(state)):
+        chunks.append(chunk)
+        writer({"type": "token", "text": chunk})
+    return {"answer": "".join(chunks).strip()}
 
 
 def should_chart_node(state: RAGState) -> dict:
@@ -184,14 +203,11 @@ def save_messages_node(state: RAGState) -> dict:
 
 
 def generate_title_node(state: dict) -> dict:
-    """Standalone node (not wired into the main graph — see app/rag/title.py)
-    run on its own thread in parallel with the main answer pipeline, from
-    just the user's first message, so it doesn't need to wait for (or
-    block) the answer.
-    """
+    """Generates and persists the title during the first turn's main trace."""
     messages = [
         {"role": "system", "content": GENERATE_TITLE_PROMPT},
-        {"role": "user", "content": f"First message: {state['first_question']}"},
+        {"role": "user", "content": f"First message: {state['query']}"},
     ]
     title = call_llm(messages, temperature=0.3).strip().strip('"').rstrip(".")
+    update_conversation_title(state["conversation_id"], title[:80])
     return {"title": title[:80]}
