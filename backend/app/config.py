@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "meta/muse-glimmer-30b"
     EMBEDDING_MODEL: str = "sentence-transformers/multi-qa-mpnet-base-dot-v1"
 
+    # Baidu's document-parsing OCR model, run locally via transformers so
+    # ingestion never depends on a rate-limited external OCR API.
+    OCR_MODEL: str = "baidu/Unlimited-OCR"
+    OCR_DPI: int = 300
+
     STORAGE_DIR: str = str(Path(__file__).resolve().parent.parent / "storage")
 
     CHUNK_SIZE: int = 4000

@@ -6,8 +6,16 @@ langgraph>=0.2
 langsmith>=0.1
 langchain-text-splitters>=0.3
 sentence-transformers>=3.3
-docling>=2.100
 langchain-nvidia-ai-endpoints>=0.3
+# OCR ingestion (baidu/Unlimited-OCR, run locally via transformers).
+# torch/torchvision/transformers are already pulled in above (sentence-transformers)
+# at newer versions than the model card's tested pins (torch==2.10.0,
+# torchvision==0.25.0, transformers==4.57.1) - if `trust_remote_code` loading
+# breaks, that version gap (esp. transformers 4.x -> 5.x) is the first suspect.
+pymupdf>=1.24
+einops>=0.8
+addict>=2.4
+easydict>=1.13
 pyjwt>=2.9
 python-multipart>=0.0.12
 pydantic-settings>=2.6

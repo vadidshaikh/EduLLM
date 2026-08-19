@@ -39,7 +39,7 @@ cd backend
 pip install -r requirements.txt
 ```
 
-(First install is slow — `torch` and `docling` are large.)
+(First install is slow — `torch` and the OCR model weights are large.)
 
 ### 3. Database
 
@@ -165,8 +165,8 @@ Then manually edit `frontend/src/auth/` to re-add the old `DevLoginPage.jsx` (it
 - Check the uvicorn output, not just stdin
 
 **Ingestion fails for a PDF?**
-- Docling is picky about file formats
-- Try a simpler PDF or a Markdown file first
+- Non-PDF/image formats are converted to PDF via headless LibreOffice first (`soffice` must be on PATH) — check that conversion succeeded
+- Try a simpler PDF or a plain image file first
 
 **"No such file or directory: backend/storage"?**
 - The `storage/` directory is created on first upload

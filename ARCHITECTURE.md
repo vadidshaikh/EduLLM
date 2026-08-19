@@ -299,7 +299,8 @@ backend/
       mailer.py               Resend API sender (or console logger for dev)
       dependencies.py         FastAPI auth guards (@Depends)
     ingestion/
-      parser.py              Docling (PDF/docx/md parser)
+      parser.py              baidu/Unlimited-OCR (renders every format to page images via LibreOffice + PyMuPDF, then OCRs them)
+      ocr.py                 Unlimited-OCR model loading + inference
       splitter.py              RecursiveCharacterTextSplitter
       embedder.py               Sentence-Transformers wrapper (batched, reports progress)
       pipeline.py                Orchestrates: parse → split → embed → store (traced, progress-tracked)
@@ -370,7 +371,7 @@ plan.md                      Original Phase 1 architecture spec
 
 | Component | Tech | Why |
 |-----------|------|-----|
-| **Parser** | Docling | Accurate table extraction, multi-format support |
+| **Parser** | baidu/Unlimited-OCR (self-hosted, via Hugging Face) | Unlimited local OCR/document parsing, no external API limits |
 | **Chunks** | LangChain RecursiveCharacterTextSplitter | Respects semantics, overlaps context |
 | **Embeddings** | Sentence-Transformers (multi-qa-mpnet) | Fast, good for QA, works offline |
 | **Vector DB** | PostgreSQL + pgvector | Single database for everything, no ops overhead |
