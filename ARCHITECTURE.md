@@ -2,7 +2,7 @@
 
 ## System Overview
 
-Edu LLM is a role-based RAG system built on FastAPI + LangGraph + PostgreSQL + pgvector + React.
+Edu LLM is a role-based RAG system built on FastAPI + LangGraph + PostgreSQL + pgvector + React, using NVIDIA-hosted models (via `langchain-nvidia-ai-endpoints`) for generation and LangSmith for tracing.
 
 ```
 User (Institute Email)
@@ -13,13 +13,12 @@ JWT Session Token
   ↓
 Chat Message with Conversation ID
   ↓
-LangGraph RAG Pipeline
-  ├─ verify_token
-  ├─ resolve_role
-  ├─ load_history (if not first message)
-  ├─ condense_query (rewrite follow-up with context)
+LangGraph RAG Pipeline (streamed token-by-token to the client)
+  ├─ load_history
+  ├─ (first turn?) generate_title   ─┐
+  ├─ (else) condense_query          ─┘→ both lead into retrieval
   ├─ retrieve_filtered (vector search, role-filtered)
-  ├─ generate_answer (LLM call with history + context)
+  ├─ generate_answer (LLM call w/ history + context, streams tokens)
   ├─ should_chart (classifier: does answer need a chart?)
   ├─ generate_chart (if yes) + validate_chart_data
   ├─ respond (format sources)
@@ -28,22 +27,26 @@ LangGraph RAG Pipeline
 Response + Conversation Sidebar
 ```
 
+Every conversation's turns are grouped into one LangSmith thread (`app/tracing.py`), and document ingestion runs are traced the same way, so both chat and ingestion pipelines are inspectable end-to-end in LangSmith when tracing is enabled.
+
 ## Phase 2: Multi-Turn & Memory
 
 ### Conversation Tables
 
 ```sql
-conversations (id, user_email, title, created_at, updated_at)
+conversations (id, user_email, title, is_pinned, created_at, updated_at)
 messages (id, conversation_id FK, role, content, chart_config, sources, created_at)
 login_tokens (token PK, email, expires_at, used)
 ```
 
 **Why separate from chunks?** Conversations are user data, chunks are documents. Different retention policies, different schemas.
 
+Conversations can be pinned (`is_pinned`), which sorts them above the rest of the sidebar (`ORDER BY is_pinned DESC, updated_at DESC`) regardless of recency.
+
 ### Multi-Turn Flow
 
 1. User sends first message → creates new `conversation`
-2. LangGraph runs: retrieval + generation
+2. LangGraph runs: retrieval + generation, streaming tokens back as they're generated
 3. Both turns (user + assistant) are saved to `messages`
 4. Response includes `conversation_id` (client stores it)
 5. Next message sends `conversation_id` + new query
@@ -51,15 +54,29 @@ login_tokens (token PK, email, expires_at, used)
 7. `condense_query` rewrites "what about X?" into a standalone search query using that context
 8. Everything else uses the condensed query
 
+### Editing a Message
+
+The user can edit an earlier question from the chat UI. Editing re-sends the edited text as a new query, but first the client calls `DELETE /conversations/{id}/messages/{message_id}`, which deletes that message and everything sent after it (`delete_messages_from`, keyed on `created_at`) — the old answer (and any turns built on top of it) no longer apply once the question itself has changed.
+
 ### Auto-Generated Titles
 
-After the first response is sent:
-- `BackgroundTasks.add_task()` triggers title generation *asynchronously*
-- Tiny LangGraph runs: `generate_title_node` only
-- Calls `update_conversation_title()` when done
-- Sidebar polls every few seconds to pick up the title
+Title generation is a node (`generate_title_node`) inside the main graph, not a separate background task. `load_history` routes to it only when history is empty (i.e. this is the conversation's first turn); every later turn routes to `condense_query` instead. Running it inline means the title generation call shows up inside the same LangSmith trace as the rest of that turn, and the client can just poll `GET /conversations` — no separate async job to coordinate.
 
-Why async? Doesn't block the user's initial response.
+## Streaming
+
+`POST /query/stream` streams the answer back as newline-delimited JSON instead of waiting for the whole pipeline to finish:
+
+```
+{"type": "start", "conversation_id": "..."}
+{"type": "token", "text": "..."}      × many
+{"type": "done", "answer", "chart", "sources", "user_message_id", "assistant_message_id"}
+{"type": "error", "message": "..."}   (instead of "done", on failure)
+```
+
+- `app/rag/streaming.py::run_query_stream` runs the *same compiled graph* as the non-streaming `/query` endpoint (`app/rag/graph.py`), so LangSmith still traces it as one real graph run rather than a hand-rolled chain.
+- Token streaming happens inside `generate_answer_node`: it calls `stream_llm(...)` and pushes each chunk out via LangGraph's `get_stream_writer()` as a `"custom"` stream event. `graph.stream(..., stream_mode=["custom", "values"])` interleaves those custom token events with the final state.
+- `get_stream_writer()` is a no-op when nothing is consuming `"custom"` events, so the exact same node function backs both `graph.invoke()` (plain `/query`) and `graph.stream()` (`/query/stream`) — no duplicated generation logic.
+- The frontend (`api/client.js::queryLLMStream`) reads the fetch response body manually (not `EventSource`, which can't send the `Authorization` header this API needs) and dispatches each line to `onStart` / `onToken` / `onDone` / `onError` handlers that `ChatPage.jsx` uses to render tokens as they arrive and auto-scroll the message list.
 
 ## Access Control (The Core)
 
@@ -130,6 +147,8 @@ def parse_institute_email(email: str) -> dict:
 
 This avoids hardcoding department codes and works across SCET's many departments.
 
+`DEV_FACULTY_EMAILS` (a comma-separated list in `.env`) lets specific non-institute addresses log in as faculty for local development/demos, bypassing the `@scet.ac.in` domain check entirely.
+
 ### Login Flow
 
 1. **POST /auth/login** with email
@@ -143,7 +162,24 @@ This avoids hardcoding department codes and works across SCET's many departments
 
 ---
 
-## Chart Pipeline (Phase 2 Fix)
+## LLM Provider (NVIDIA API Catalog)
+
+`app/rag/llm.py` calls NVIDIA-hosted models via `ChatNVIDIA` (`langchain-nvidia-ai-endpoints`), converting the app's OpenAI-style `{role, content}` message dicts into LangChain message objects. Two entry points:
+
+- `call_llm(messages, ...)` — blocking, returns the full text reply. Used for condensation, chart classification, chart generation, and title generation.
+- `stream_llm(messages, ...)` — generator, yields text chunks as they arrive. Used only by `generate_answer_node` for the streamed answer.
+
+**Deterministic fallback:** if the NVIDIA call raises (provider down, rate-limited, etc.), both functions fall back to `_fallback_reply()` instead of failing the request:
+- Query condensation falls back to just echoing the raw new question.
+- The chart classifier falls back to `"no"`.
+- Chart generation falls back to `"{}"` (parses to no chart).
+- The final answer falls back to a plain "model unavailable" message.
+
+For `stream_llm`, the fallback only fires if no real tokens were yielded yet — once partial content has already reached the client, appending a fallback sentence would just garble the answer, so it's skipped.
+
+---
+
+## Chart Pipeline
 
 Old approach: "Generate answer + decide whether to include a chart" in one prompt → LLM didn't self-police reliably.
 
@@ -182,30 +218,65 @@ This is the "deterministic backstop" — even if the LLM hallucinates, the data 
 ```
 START
   ↓
-verify_token
-  ↓
-resolve_role
-  ↓
 load_history
   ├─ history non-empty? → condense_query
-  └─ empty? → (skip condense)
-  ↓
-retrieve_filtered (uses condensed_query or raw query)
-  ↓
-generate_answer (with history in context if present)
-  ↓
-should_chart (classifier)
-  ├─ yes? → generate_chart → validate_chart_data
-  └─ no? → (skip)
-  ↓
-respond (format sources + ensure chart key exists)
-  ↓
-save_messages (persist user + assistant turns)
-  ↓
-END
+  └─ empty (first turn)? → generate_title
+  ↓                             ↓
+  └─────────────┬───────────────┘
+                ↓
+        retrieve_filtered (uses condensed_query, or raw query on first turn)
+                ↓
+        generate_answer (streams tokens; history in context if present)
+                ↓
+        should_chart (classifier)
+          ├─ yes? → generate_chart → validate_chart_data
+          └─ no? → (skip)
+                ↓
+        respond (format sources + ensure chart key exists)
+                ↓
+        save_messages (persist user + assistant turns)
+                ↓
+        END
 ```
 
-**Title generation** is a separate, tiny graph run via `BackgroundTasks` after the response is sent.
+`generate_title` and `condense_query` are mutually exclusive per turn — the first turn has no history to condense (and needs a title), every later turn has history to condense (and already has a title). Both paths converge on `retrieve_filtered`.
+
+The whole graph is compiled once at import time (`app/rag/graph.py::graph`) and reused by both `graph.invoke()` (`/query`) and `graph.stream()` (`/query/stream`) — see [Streaming](#streaming).
+
+---
+
+## Observability (LangSmith)
+
+`app/tracing.py` provides two small helpers that make LangGraph/LangSmith tracing legible instead of a wall of identically-named runs:
+
+- `conversation_trace_config(conversation_id)` → passed as `config=` to `graph.invoke`/`graph.stream`. Groups every turn of a conversation into one LangSmith thread (`thread_id`) and names each trace `chat-{conversation_id}` instead of the default `chat_turn` for every run.
+- `document_trace_extra(document_id, title)` → passed as `langsmith_extra=` to `run_ingestion`. Names the ingestion run `ingest-{title}` and groups its stages (parse → split → embed → index) into one thread keyed on the document id.
+
+Ingestion's embedding and indexing stages (`embed_texts`, `_index_chunks` in `app/ingestion/pipeline.py`) are wrapped in `@traceable` with custom `process_inputs`/`process_outputs` so LangSmith gets chunk counts and vector dimensions instead of the raw embedding floats or full chunk text.
+
+Tracing is opt-in via `.env` (`LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`, `LANGSMITH_ENDPOINT`) — LangGraph/LangSmith pick these up automatically; nothing errors if they're unset, tracing is just a no-op.
+
+---
+
+## Document Ingestion & Versioning
+
+### Progress Tracking
+
+`documents.progress` (0–100) is updated at each ingestion stage so the admin UI can render a live progress bar instead of a static "processing" label:
+
+| Stage | Progress |
+|---|---|
+| queued → processing starts | 5 |
+| parse done | 15 |
+| split done | 20 |
+| embedding | 20 → 90, incrementally per batch (`on_progress` callback in `embed_texts`) |
+| indexed | 100 |
+
+`DocumentsTable.jsx::StatusCell` renders the bar while `status` is `queued` or `processing`, and falls back to a plain status pill once the document reaches `indexed` or `failed`.
+
+### Re-upload / Versioning
+
+Uploading a document whose `title` already exists doesn't create a duplicate row — `insert_document()` updates the existing row in place (new file, `status` reset to `queued`, `progress` reset to `0`) and increments `documents.version`. The column exists and is tracked server-side, but is not currently surfaced as a column in the admin UI table (only Title / Classified / Status / Uploaded / Actions are shown).
 
 ---
 
@@ -215,80 +286,82 @@ END
 backend/
   app/
     main.py                FastAPI app + logging config
-    config.py              Settings (environment variables)
-    storage.py             File upload helpers
+    config.py               Settings (environment variables)
+    storage.py               File upload helpers
+    tracing.py                LangSmith trace-config helpers (conversations + ingestion)
     db/
-      pool.py              Postgres connection pool
-      queries.py           All SQL (read first for access control)
+      pool.py               Postgres connection pool
+      queries.py            All SQL (read first for access control)
     auth/
-      email_rules.py       Institute email format parsing + role derivation
-      jwt.py               JWT creation/verification
-      magic_link.py        Magic-link token generation/validation
-      mailer.py            Resend API sender (or console logger for dev)
-      dependencies.py      FastAPI auth guards (@Depends)
+      email_rules.py        Institute email format parsing + role derivation
+      jwt.py                 JWT creation/verification
+      magic_link.py          Magic-link token generation/validation
+      mailer.py               Resend API sender (or console logger for dev)
+      dependencies.py         FastAPI auth guards (@Depends)
     ingestion/
-      parser.py            Docling (PDF/docx/md parser)
-      splitter.py          RecursiveCharacterTextSplitter
-      embedder.py          Sentence-Transformers wrapper
-      pipeline.py          Orchestrates: parse → split → embed → store
+      parser.py              Docling (PDF/docx/md parser)
+      splitter.py              RecursiveCharacterTextSplitter
+      embedder.py               Sentence-Transformers wrapper (batched, reports progress)
+      pipeline.py                Orchestrates: parse → split → embed → store (traced, progress-tracked)
     rag/
-      state.py             LangGraph RAGState type
-      prompts.py           System + classifier + chart-generation prompts
-      llm.py               LiteLLM completion wrapper
-      chart_parser.py      Extract & validate JSON from chart output
-      nodes.py             All graph node functions (load_history, condense_query, etc.)
-      graph.py             Compiled LangGraph with conditional edges
-      title.py             Separate tiny graph for title generation
+      state.py                LangGraph RAGState type
+      prompts.py                System + classifier + chart-generation + title prompts
+      llm.py                     ChatNVIDIA wrapper (call_llm + stream_llm, deterministic fallback)
+      chart_parser.py             Extract & validate JSON from chart output
+      nodes.py                     All graph node functions (load_history, condense_query, generate_title, etc.)
+      graph.py                      Compiled LangGraph with conditional edges
+      streaming.py                  Token-streaming wrapper around the same compiled graph
     api/
-      schemas.py           Pydantic request/response models
-      query.py             POST /query (conversation + RAG)
-      conversations.py     GET/DELETE /conversations endpoints
-      auth.py              POST /auth/login, /auth/verify
-      admin_documents.py   POST/GET/DELETE /admin/documents
+      schemas.py               Pydantic request/response models
+      query.py                  POST /query, POST /query/stream (conversation + RAG)
+      conversations.py           GET/DELETE /conversations, PATCH (rename/pin), DELETE .../messages/{id}
+      auth.py                     POST /auth/login, /auth/verify
+      admin_documents.py           POST/GET/PATCH/DELETE /admin/documents (traced ingestion kickoff)
   db/
-    schema.sql             Postgres DDL (all tables)
+    schema.sql                DDL: documents (+progress, +version), chunks, conversations (+is_pinned), messages, login_tokens
   scripts/
-    init_db.py             Apply schema idempotently
-    mint_dev_token.py      Generate test JWTs (still useful for curl)
-  requirements.txt         Python dependencies
+    init_db.py               Apply schema idempotently
+    mint_dev_token.py         Generate test JWTs (still useful for curl)
   Dockerfile
-  storage/                 (Volume: uploaded PDF/docx/md files)
+  storage/                   (Volume: uploaded PDF/docx/md files)
 
 frontend/
   src/
-    App.jsx                Main router
-    main.jsx               Entry point
+    App.jsx                  Main router
+    main.jsx                 Entry point
+    ThemeContext.jsx           Light/dark theme provider, persisted to localStorage
     api/
-      client.js            HTTP wrapper + endpoint definitions
+      client.js                HTTP wrapper + endpoint definitions (incl. streaming reader)
     auth/
-      useAuth.js           Hook: token state + claims decoding
-      EmailLoginPage.jsx   Email input → magic link request
-      VerifyPage.jsx       Handles /auth/verify?token=... callback
+      useAuth.js                Hook: token state + claims decoding
+      EmailLoginPage.jsx          Email input → magic link request
+      VerifyPage.jsx               Handles /auth/verify?token=... callback
     chat/
-      ChatPage.jsx         Main UI: sidebar + messages + query input
-      Sidebar.jsx          Conversation history + navigation
-      AnswerBlock.jsx      Renders assistant message + chart + sources
-      ChartBlock.jsx       Chart.js integration
-      RoleBadge.jsx        Shows current role (VIEWING AS: faculty)
-      SourceTag.jsx        Citation tags
+      ChatPage.jsx                Main UI: sidebar + streamed messages + edit/query input
+      Sidebar.jsx                  Conversation history + pin/rename + navigation
+      AnswerBlock.jsx               Renders assistant message + chart + sources
+      ChartBlock.jsx                 Chart.js integration
+      RoleBadge.jsx                  Shows current role (VIEWING AS: faculty)
+      SourceTag.jsx                   Citation tags
     admin/
-      AdminPage.jsx        Document upload + listing (faculty only)
-      DocumentsTable.jsx   File management UI
-      UploadForm.jsx       Upload form + role selector
+      AdminPage.jsx                Document upload + listing (faculty only)
+      DocumentsTable.jsx             File management UI (progress bar, inline rename)
+      UploadForm.jsx                  Upload form + role selector
     styles/
-      theme.css            Dark theme (CSS variables)
-      fonts.css            Google Fonts
-  vite.config.js           Vite configuration
-  eslint.config.js         Linting rules
+      theme.css                Dark/light theme (CSS variables)
+      fonts.css                 Google Fonts
+  vite.config.js             Vite configuration
+  eslint.config.js            Linting rules
   package.json
 
-docker-compose.yml         Services: postgres, backend, frontend
-.env                       Environment variables (committed with dev values)
-.env.example               Config template
-README.md                  Quick start (this document)
-STARTUP.md                 Setup instructions
-ARCHITECTURE.md            This document
-plan.md                    Original Phase 1 architecture spec
+docker-compose.yml         Services: postgres, backend, admin-ui (frontend container)
+requirements.txt           Python dependencies (repo root, shared by backend + scripts)
+.env                        Environment variables (committed with dev values)
+.env.example                 Config template
+README.md                   Quick start (this document)
+STARTUP.md                   Setup instructions
+ARCHITECTURE.md              This document
+plan.md                      Original Phase 1 architecture spec
 ```
 
 ---
@@ -301,9 +374,10 @@ plan.md                    Original Phase 1 architecture spec
 | **Chunks** | LangChain RecursiveCharacterTextSplitter | Respects semantics, overlaps context |
 | **Embeddings** | Sentence-Transformers (multi-qa-mpnet) | Fast, good for QA, works offline |
 | **Vector DB** | PostgreSQL + pgvector | Single database for everything, no ops overhead |
-| **Orchestration** | LangGraph | Explicit flow, handles branching (history, chart decision) |
-| **LLM** | LiteLLM | Provider-agnostic (OpenAI, HuggingFace, Anthropic, local) |
-| **Backend** | FastAPI | Fast, built-in validation, OpenAPI docs |
+| **Orchestration** | LangGraph | Explicit flow, handles branching (history, chart decision), native token streaming |
+| **LLM** | NVIDIA API Catalog via `ChatNVIDIA` (`langchain-nvidia-ai-endpoints`) | Hosted inference, streaming support, swappable model id via `LLM_MODEL` |
+| **Observability** | LangSmith | Thread-grouped traces per conversation/document, opt-in via env vars |
+| **Backend** | FastAPI | Fast, built-in validation, OpenAPI docs, native `StreamingResponse` |
 | **Frontend** | React 19 + Vite | Fast iteration, component-based, reactive |
 | **Deployment** | Docker Compose | Everything-in-one, reproducible |
 
@@ -312,11 +386,12 @@ plan.md                    Original Phase 1 architecture spec
 ## Deployment Notes
 
 For production:
-1. **Set real `JWT_SECRET`, `RESEND_*` env vars** in `.env` or secrets manager
-2. **Use a real LLM provider** (OpenAI, Anthropic, etc.) — set `LLM_MODEL` in `.env`
+1. **Set real `JWT_SECRET`, `RESEND_*`, `NVIDIA_API_KEY` env vars** in `.env` or secrets manager
+2. **Set `LLM_MODEL`** to the NVIDIA API Catalog model id you want to serve
 3. **Configure Postgres** (hosted Postgres or managed DB)
 4. **Use a real storage backend** instead of local `/backend/storage` (S3, GCS, etc.)
 5. **Enable HTTPS** (reverse proxy with cert, or use Railway/Fly.io which does it for you)
-6. **Monitor logs** (LangGraph has built-in observability; integrate with your logging service)
+6. **Turn on LangSmith tracing** (`LANGSMITH_TRACING=true` + `LANGSMITH_API_KEY`) for production observability, or point `LANGSMITH_ENDPOINT` at a self-hosted instance
+7. **Don't set `DEV_FACULTY_EMAILS`** in production — it's a domain-check bypass meant for local dev/demos only
 
 See `docker-compose.yml` for the local development setup — adapt each service's environment and ports for your infrastructure.
