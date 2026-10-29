@@ -128,6 +128,8 @@ documents: + workspace_id, + visibility: workspace|classrooms, + classroom_ids U
 
 ## Phase 4 — Quiz and assignment generation
 
+**Status:** implemented (2026-10-30).
+
 **Goal:** generate quizzes/assignments by subject, so that no two classes get the same assignment and no two students get the same quiz.
 
 ### Approach: question bank first, then assignment of questions
@@ -148,7 +150,19 @@ Generating per student directly is slow, expensive and hard to review. Instead:
 ### Decisions
 - [x] No-repeat rule applies within one subject in one term (`classroom.term`).
 - [x] No default `max_overlap`; only identical sets are forbidden unless faculty set a cap.
-- [ ] Export format: in-app only, or also PDF/DOCX for printing?
+- [x] The no-repeat rule also covers a classroom's own later assignments: a question is in at most one assignment per
+  subject and term. Deleting an assignment frees its questions. Classrooms with no term count as one term.
+- [x] Stratify by the faculty's topic (set when generating or writing a question), not a model-chosen sub-topic: model
+  labels were too fragmented to give enough distinct sets.
+- [x] A question is a near-duplicate when the cosine similarity of its text (prompt + options) to another in the
+  workspace's bank is > 0.9; generated ones are dropped, hand-written/edited ones are refused (409).
+- [x] Questions in use can be edited (typo fixes show in every set) but can't change type or number of options, and
+  can't be deleted.
+- [x] A quiz's sets are made for the roster at creation; students who join later get theirs from "Give them sets",
+  under the same rules.
+- [x] Only shared workspaces have the Quizzes tab (classrooms only exist there).
+- [ ] Export format: in-app only for now; PDF/DOCX for printing still open.
+- [ ] No notice to students when a quiz/assignment is added (Phase 1 notices are document-only).
 
 ---
 

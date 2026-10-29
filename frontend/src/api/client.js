@@ -434,4 +434,101 @@ export async function downloadNote(token, noteId) {
   URL.revokeObjectURL(url);
 }
 
+// --- Question bank, quizzes and assignments (Phase 4) ---
+
+/**
+ * A workspace's question bank, newest first. Each: {id, subject, topic, type: mcq|short|long, difficulty 1-3,
+ * body: {prompt, options?}, answer: {correct, explanation}, status: draft|approved, use_count, ...}.
+ */
+export function listQuestions(token, workspaceId) {
+  return request(`/workspaces/${workspaceId}/questions`, { token });
+}
+
+/**
+ * Has the model draft questions from source docs (saved as drafts; near-duplicates dropped). Can take a
+ * minute or two. Returns {questions, duplicates}.
+ */
+export function generateQuestions(token, workspaceId, { subject, topic, sourceDocIds, count, types, difficulties, instructions }) {
+  return request(`/workspaces/${workspaceId}/questions/generate`, {
+    method: "POST",
+    token,
+    body: { subject, topic, source_doc_ids: sourceDocIds, count, types, difficulties, instructions },
+  });
+}
+
+/**
+ * Adds a hand-written question ({subject, topic, type, difficulty, prompt, options, correct, explanation}).
+ * 409 if the bank already has one too close to it.
+ */
+export function createQuestion(token, workspaceId, question) {
+  return request(`/workspaces/${workspaceId}/questions`, { method: "POST", token, body: question });
+}
+
+/**
+ * Edits a question: {subject, topic, status, content: {type, difficulty, prompt, options, correct, explanation}}.
+ */
+export function updateQuestion(token, questionId, changes) {
+  return request(`/questions/${questionId}`, { method: "PATCH", token, body: changes });
+}
+
+export function setQuestionsStatus(token, workspaceId, questionIds, status) {
+  return request(`/workspaces/${workspaceId}/questions/status`, {
+    method: "POST",
+    token,
+    body: { question_ids: questionIds, status },
+  });
+}
+
+export function deleteQuestion(token, questionId) {
+  return request(`/questions/${questionId}`, { method: "DELETE", token });
+}
+
+export function listAssessments(token, classroomId) {
+  return request(`/classrooms/${classroomId}/assessments`, { token });
+}
+
+/**
+ * Whether the bank can supply a quiz/assignment ({kind, subject, count, topics, types, difficulties,
+ * max_overlap}) for this classroom, without creating it: {ok, message, available, needed, students, sharing}.
+ */
+export function checkAssessment(token, classroomId, config) {
+  return request(`/classrooms/${classroomId}/assessments/check`, { method: "POST", token, body: config });
+}
+
+export function createAssessment(token, classroomId, assessment) {
+  return request(`/classrooms/${classroomId}/assessments`, { method: "POST", token, body: assessment });
+}
+
+/**
+ * An assessment with every set and answer: {..., sets: [{student_email, student_name, items}], missing_students}.
+ */
+export function getAssessment(token, assessmentId) {
+  return request(`/assessments/${assessmentId}`, { token });
+}
+
+/**
+ * Gives a quiz set to students who joined the classroom after the quiz was made.
+ */
+export function addQuizStudents(token, assessmentId) {
+  return request(`/assessments/${assessmentId}/add-students`, { method: "POST", token });
+}
+
+export function deleteAssessment(token, assessmentId) {
+  return request(`/assessments/${assessmentId}`, { method: "DELETE", token });
+}
+
+/**
+ * Student: the quizzes and assignments they have, across their classrooms.
+ */
+export function listMyAssessments(token) {
+  return request("/my/assessments", { token });
+}
+
+/**
+ * Student: their own questions for one assessment, in their order (no answers).
+ */
+export function getMyAssessment(token, assessmentId) {
+  return request(`/my/assessments/${assessmentId}`, { token });
+}
+
 export { ApiError };

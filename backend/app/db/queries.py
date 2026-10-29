@@ -18,7 +18,7 @@ from typing import Any
 from uuid import UUID
 
 from pgvector import Vector
-from psycopg.errors import UniqueViolation
+from psycopg.errors import ForeignKeyViolation, UniqueViolation
 from psycopg.types.json import Json
 
 from app.db.pool import pool
@@ -1255,9 +1255,9 @@ def search_source_chunks(
         scopes = _user_scope_ids(conn, email, role)
         return conn.execute(
             """
-            SELECT r.document_id, r.chunk_index, r.chunk_text
+            SELECT r.id, r.document_id, r.chunk_index, r.chunk_text
             FROM (
-                SELECT c.document_id, c.chunk_index, c.chunk_text,
+                SELECT c.id, c.document_id, c.chunk_index, c.chunk_text,
                        row_number() OVER (PARTITION BY c.document_id ORDER BY c.embedding <=> %s) AS rank
                 FROM chunks c
                 WHERE c.document_id = ANY(%s) AND c.scope_ids && %s::uuid[]
@@ -1416,3 +1416,408 @@ def find_document_by_title(workspace_id: UUID, title: str) -> dict[str, Any] | N
         return conn.execute(
             "SELECT id, title FROM documents WHERE workspace_id = %s AND title = %s", (workspace_id, title)
         ).fetchone()
+
+
+# --- Question bank, quizzes and assignments (Phase 4, mds/PLAN.md) ---
+#
+# Same rule as notes: callers check the user is faculty in the question's
+# workspace / the assessment's classroom's workspace first. The student
+# functions check classroom membership themselves and never return answers.
+
+_QUESTION_COLUMNS = """
+    q.id, q.workspace_id, q.subject, q.topic, q.type, q.difficulty, q.body, q.answer,
+    q.source_chunk_ids, q.source_doc_ids, q.status, q.created_by, q.updated_by,
+    q.created_at, q.updated_at,
+    COALESCE(uc.name, q.created_by) AS created_by_name,
+    (SELECT count(DISTINCT ai.assessment_id) FROM assessment_items ai WHERE ai.question_id = q.id) AS use_count
+"""
+
+
+def list_question_prompts(workspace_id: UUID, subject: str, *, limit: int) -> list[str]:
+    """The prompts of the workspace's most recent questions in a subject."""
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT body->>'prompt' AS prompt FROM questions
+            WHERE workspace_id = %s AND lower(subject) = lower(%s)
+            ORDER BY created_at DESC LIMIT %s
+            """,
+            (workspace_id, subject, limit),
+        ).fetchall()
+        return [r["prompt"] for r in rows]
+
+
+def most_similar_question(
+    workspace_id: UUID, embedding: list[float], *, exclude_id: UUID | None = None
+) -> dict[str, Any] | None:
+    """The workspace's question closest to `embedding` (any subject), with
+    its cosine similarity.
+    """
+    with pool.connection() as conn:
+        return conn.execute(
+            """
+            SELECT id, body->>'prompt' AS prompt, 1 - (embedding <=> %s) AS similarity
+            FROM questions
+            WHERE workspace_id = %s AND id IS DISTINCT FROM %s
+            ORDER BY embedding <=> %s
+            LIMIT 1
+            """,
+            (Vector(embedding), workspace_id, exclude_id, Vector(embedding)),
+        ).fetchone()
+
+
+def insert_questions(
+    *, workspace_id: UUID, subject: str, topic: str, questions: list[dict[str, Any]], actor_email: str
+) -> list[UUID]:
+    """Adds questions to the bank as drafts."""
+    with pool.connection() as conn:
+        ids = []
+        for q in questions:
+            row = conn.execute(
+                """
+                INSERT INTO questions (workspace_id, subject, topic, type, difficulty, body, answer,
+                                       source_chunk_ids, source_doc_ids, embedding, created_by, updated_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (
+                    workspace_id,
+                    subject,
+                    topic,
+                    q["type"],
+                    q["difficulty"],
+                    Json(q["body"]),
+                    Json(q["answer"]),
+                    q.get("source_chunk_ids", []),
+                    q.get("source_doc_ids", []),
+                    Vector(q["embedding"]),
+                    actor_email,
+                    actor_email,
+                ),
+            ).fetchone()
+            ids.append(row["id"])
+        conn.commit()
+        return ids
+
+
+def list_questions(workspace_id: UUID) -> list[dict[str, Any]]:
+    """The workspace's bank, newest first."""
+    with pool.connection() as conn:
+        return conn.execute(
+            f"""
+            SELECT {_QUESTION_COLUMNS}
+            FROM questions q LEFT JOIN users uc ON uc.email = q.created_by
+            WHERE q.workspace_id = %s
+            ORDER BY q.created_at DESC, q.id
+            """,
+            (workspace_id,),
+        ).fetchall()
+
+
+def get_question(question_id: UUID) -> dict[str, Any] | None:
+    with pool.connection() as conn:
+        return conn.execute(
+            f"SELECT {_QUESTION_COLUMNS} FROM questions q LEFT JOIN users uc ON uc.email = q.created_by WHERE q.id = %s",
+            (question_id,),
+        ).fetchone()
+
+
+_QUESTION_EDITABLE = ("subject", "topic", "type", "difficulty", "body", "answer", "status", "embedding")
+
+
+def update_question(question_id: UUID, changes: dict[str, Any], *, actor_email: str) -> None:
+    fields = [f for f in _QUESTION_EDITABLE if f in changes]
+    if not fields:
+        return
+    wrap = {"body": Json, "answer": Json, "embedding": Vector}
+    values = [wrap.get(f, lambda v: v)(changes[f]) for f in fields]
+    assignments = "".join(f"{f} = %s, " for f in fields)
+    with pool.connection() as conn:
+        conn.execute(
+            f"UPDATE questions SET {assignments}updated_by = %s, updated_at = now() WHERE id = %s",
+            (*values, actor_email, question_id),
+        )
+        conn.commit()
+
+
+def set_questions_status(workspace_id: UUID, question_ids: list[UUID], status: str, *, actor_email: str) -> int:
+    """Approves (or un-approves) several of a workspace's questions at once."""
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            UPDATE questions SET status = %s, updated_by = %s, updated_at = now()
+            WHERE workspace_id = %s AND id = ANY(%s) AND status <> %s
+            RETURNING id
+            """,
+            (status, actor_email, workspace_id, question_ids, status),
+        ).fetchall()
+        conn.commit()
+        return len(rows)
+
+
+def delete_question(question_id: UUID) -> bool:
+    """Deletes a question unless an assessment uses it. Returns whether it
+    was deleted.
+    """
+    try:
+        with pool.connection() as conn:
+            conn.execute("DELETE FROM questions WHERE id = %s", (question_id,))
+            conn.commit()
+        return True
+    except ForeignKeyViolation:
+        return False
+
+
+def rule_key(subject: str, term: str | None) -> str:
+    """Assignments with the same key can't share questions: one subject in
+    one term (classrooms with no term count as one term).
+    """
+    return f"{subject.strip().lower()}|{(term or '').strip().lower()}"
+
+
+def approved_pool(
+    workspace_id: UUID,
+    *,
+    subject: str,
+    topics: list[str],
+    types: list[str],
+    difficulties: list[int],
+    unused_by_assignments: str | None = None,
+) -> list[dict[str, Any]]:
+    """The workspace's approved questions in a subject, narrowed by topic,
+    type and difficulty (empty list = any). With `unused_by_assignments`
+    (a rule key), questions already in an assignment with that key are left
+    out.
+    """
+    with pool.connection() as conn:
+        return conn.execute(
+            """
+            SELECT q.id, q.topic, q.difficulty, q.type,
+                   COALESCE(jsonb_array_length(q.body->'options'), 0) AS option_count
+            FROM questions q
+            WHERE q.workspace_id = %(ws)s AND q.status = 'approved'
+              AND lower(q.subject) = lower(%(subject)s)
+              AND (cardinality(%(topics)s::text[]) = 0 OR lower(q.topic) = ANY(%(topics)s::text[]))
+              AND (cardinality(%(types)s::text[]) = 0 OR q.type = ANY(%(types)s::text[]))
+              AND (cardinality(%(difficulties)s::int[]) = 0 OR q.difficulty = ANY(%(difficulties)s::int[]))
+              AND (%(key)s::text IS NULL OR NOT EXISTS (
+                  SELECT 1 FROM assessment_items ai
+                  WHERE ai.question_id = q.id AND ai.kind = 'assignment' AND ai.rule_key = %(key)s
+              ))
+            ORDER BY q.id
+            """,
+            {
+                "ws": workspace_id,
+                "subject": subject,
+                "topics": [t.strip().lower() for t in topics],
+                "types": types,
+                "difficulties": difficulties,
+                "key": unused_by_assignments,
+            },
+        ).fetchall()
+
+
+def classrooms_sharing_rule(workspace_id: UUID, key: str) -> list[dict[str, Any]]:
+    """The workspace's active classrooms whose subject and term give this
+    rule key, each with whether it already has an assignment under it.
+    """
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT c.id, c.name, c.subject, c.term,
+                   EXISTS (SELECT 1 FROM assessments a
+                           WHERE a.classroom_id = c.id AND a.kind = 'assignment' AND a.rule_key = %s) AS has_assignment
+            FROM classrooms c
+            WHERE c.workspace_id = %s AND c.archived_at IS NULL AND c.subject IS NOT NULL
+            ORDER BY lower(c.name)
+            """,
+            (key, workspace_id),
+        ).fetchall()
+        return [r for r in rows if rule_key(r["subject"], r["term"]) == key]
+
+
+_ASSESSMENT_COLUMNS = """
+    a.*, COALESCE(u.name, a.created_by) AS created_by_name,
+    (SELECT count(DISTINCT ai.student_email) FROM assessment_items ai
+     WHERE ai.assessment_id = a.id AND ai.student_email IS NOT NULL) AS student_count
+"""
+
+
+def _insert_items(conn: Any, assessment: dict[str, Any], sets: dict[str | None, list[dict[str, Any]]]) -> None:
+    for email, items in sets.items():
+        for position, item in enumerate(items, start=1):
+            conn.execute(
+                """
+                INSERT INTO assessment_items
+                    (assessment_id, student_email, question_id, position, option_order, kind, rule_key)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    assessment["id"],
+                    email,
+                    item["question_id"],
+                    position,
+                    item["option_order"],
+                    assessment["kind"],
+                    assessment["rule_key"],
+                ),
+            )
+
+
+def insert_assessment(
+    *,
+    classroom_id: UUID,
+    kind: str,
+    title: str,
+    subject: str,
+    key: str,
+    config: dict[str, Any],
+    seed: int,
+    due_at: datetime | None,
+    actor_email: str,
+    sets: dict[str | None, list[dict[str, Any]]],
+) -> UUID | None:
+    """Saves an assessment and its items in one transaction. `sets` maps a
+    student's email (None = the whole class, for an assignment) to their
+    questions in order. Returns None if one of an assignment's questions was
+    taken by another assignment under the same rule in the meantime.
+    """
+    try:
+        with pool.connection() as conn:
+            row = conn.execute(
+                """
+                INSERT INTO assessments (classroom_id, kind, title, subject, rule_key, config, seed, created_by, due_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, kind, rule_key
+                """,
+                (classroom_id, kind, title, subject, key, Json(config), seed, actor_email, due_at),
+            ).fetchone()
+            _insert_items(conn, row, sets)
+            conn.commit()
+            return row["id"]
+    except UniqueViolation:
+        return None
+
+
+def add_assessment_sets(assessment_id: UUID, sets: dict[str, list[dict[str, Any]]]) -> bool:
+    """Adds sets for students who didn't have one. False if one of them got
+    a set in the meantime.
+    """
+    try:
+        with pool.connection() as conn:
+            row = conn.execute(
+                "SELECT id, kind, rule_key FROM assessments WHERE id = %s FOR UPDATE", (assessment_id,)
+            ).fetchone()
+            _insert_items(conn, row, sets)
+            conn.commit()
+            return True
+    except UniqueViolation:
+        return False
+
+
+def list_assessments(classroom_id: UUID) -> list[dict[str, Any]]:
+    with pool.connection() as conn:
+        return conn.execute(
+            f"""
+            SELECT {_ASSESSMENT_COLUMNS}
+            FROM assessments a LEFT JOIN users u ON u.email = a.created_by
+            WHERE a.classroom_id = %s
+            ORDER BY a.created_at DESC
+            """,
+            (classroom_id,),
+        ).fetchall()
+
+
+def get_assessment(assessment_id: UUID) -> dict[str, Any] | None:
+    with pool.connection() as conn:
+        return conn.execute(
+            f"SELECT {_ASSESSMENT_COLUMNS} FROM assessments a LEFT JOIN users u ON u.email = a.created_by WHERE a.id = %s",
+            (assessment_id,),
+        ).fetchone()
+
+
+def get_assessment_items(assessment_id: UUID) -> list[dict[str, Any]]:
+    """Every item of an assessment with its question (answers included,
+    for faculty), by student then position.
+    """
+    with pool.connection() as conn:
+        return conn.execute(
+            """
+            SELECT ai.student_email, ai.position, ai.option_order, u.name AS student_name,
+                   q.id AS question_id, q.topic, q.type, q.difficulty, q.body, q.answer
+            FROM assessment_items ai
+            JOIN questions q ON q.id = ai.question_id
+            LEFT JOIN users u ON u.email = ai.student_email
+            WHERE ai.assessment_id = %s
+            ORDER BY ai.student_email NULLS FIRST, ai.position
+            """,
+            (assessment_id,),
+        ).fetchall()
+
+
+def delete_assessment(assessment_id: UUID) -> None:
+    """Deletes an assessment; its questions become free for other
+    assignments again."""
+    with pool.connection() as conn:
+        conn.execute("DELETE FROM assessments WHERE id = %s", (assessment_id,))
+        conn.commit()
+
+
+_STUDENT_CAN_SEE = """
+    JOIN classroom_members cm ON cm.classroom_id = a.classroom_id AND cm.user_email = %(email)s
+    JOIN classrooms c ON c.id = a.classroom_id AND c.archived_at IS NULL
+"""
+
+
+def list_student_assessments(email: str) -> list[dict[str, Any]]:
+    """The quizzes and assignments a student has: assignments of their
+    (active) classrooms, and quizzes with a set for them. No questions.
+    """
+    with pool.connection() as conn:
+        return conn.execute(
+            f"""
+            SELECT a.id, a.kind, a.title, a.subject, a.due_at, a.created_at,
+                   c.id AS classroom_id, c.name AS classroom_name,
+                   (SELECT count(*) FROM assessment_items ai
+                    WHERE ai.assessment_id = a.id
+                      AND (ai.student_email = %(email)s OR ai.student_email IS NULL)) AS question_count
+            FROM assessments a {_STUDENT_CAN_SEE}
+            WHERE a.kind = 'assignment' OR EXISTS (
+                SELECT 1 FROM assessment_items ai WHERE ai.assessment_id = a.id AND ai.student_email = %(email)s
+            )
+            ORDER BY a.due_at NULLS LAST, a.created_at DESC
+            """,
+            {"email": email},
+        ).fetchall()
+
+
+def get_student_assessment(assessment_id: UUID, email: str) -> dict[str, Any] | None:
+    """One assessment as a student sees it, with their questions in their
+    order (prompt and options only: never the answer), or None if they
+    can't see it.
+    """
+    with pool.connection() as conn:
+        assessment = conn.execute(
+            f"""
+            SELECT a.id, a.kind, a.title, a.subject, a.due_at, a.created_at,
+                   c.id AS classroom_id, c.name AS classroom_name
+            FROM assessments a {_STUDENT_CAN_SEE}
+            WHERE a.id = %(id)s
+            """,
+            {"email": email, "id": assessment_id},
+        ).fetchone()
+        if assessment is None:
+            return None
+        items = conn.execute(
+            """
+            SELECT ai.position, ai.option_order, q.type, q.body
+            FROM assessment_items ai JOIN questions q ON q.id = ai.question_id
+            WHERE ai.assessment_id = %s AND (ai.student_email = %s OR ai.student_email IS NULL)
+            ORDER BY ai.position
+            """,
+            (assessment_id, email),
+        ).fetchall()
+        if not items:
+            return None
+        assessment["items"] = items
+        return assessment

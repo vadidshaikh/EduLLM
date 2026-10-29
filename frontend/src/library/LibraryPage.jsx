@@ -9,6 +9,7 @@ import ClassroomsPanel from "./ClassroomsPanel";
 import DocumentDrawer from "./DocumentDrawer";
 import MembersPanel from "./MembersPanel";
 import NotesPanel from "./NotesPanel";
+import QuizzesPanel from "../quizzes/QuizzesPanel";
 
 const VIEW_KEY = "edullm_library_view";
 const RECENT_LIMIT = 8;
@@ -304,6 +305,7 @@ function Library({ auth, shelves, option, active }) {
                 ["notes", "Notes & slides"],
                 ...(kind === "shared"
                   ? [
+                      ["quizzes", "Quizzes"],
                       ["classrooms", "Classrooms"],
                       ["faculty", "Faculty"],
                     ]
@@ -442,6 +444,8 @@ function Library({ auth, shelves, option, active }) {
           {section === "notes" && (
             <NotesPanel token={auth.token} workspace={workspace} classrooms={classrooms} onDocsChanged={refresh} />
           )}
+
+          {section === "quizzes" && <QuizzesPanel token={auth.token} workspace={workspace} classrooms={classrooms} />}
 
           {section === "classrooms" && (
             <ClassroomsPanel

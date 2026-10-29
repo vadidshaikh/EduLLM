@@ -6,6 +6,7 @@ import EmailLoginPage from "./auth/EmailLoginPage";
 import VerifyPage from "./auth/VerifyPage";
 import ChatPage from "./chat/ChatPage";
 import LibraryPage from "./library/LibraryPage";
+import MyAssessmentsPage from "./quizzes/MyAssessmentsPage";
 import ScopeSwitcher from "./shell/ScopeSwitcher";
 import Notices from "./shell/Notices";
 import NewWorkspaceDialog from "./shell/NewWorkspaceDialog";
@@ -57,9 +58,16 @@ function AppShell({ auth }) {
   const [creating, setCreating] = useState(false); // the "New shared workspace" dialog
   const navigate = useNavigate();
   const isFaculty = auth.role === "faculty";
-  const view = isFaculty && location.pathname.startsWith("/library") ? "library" : "ask";
+  const view =
+    isFaculty && location.pathname.startsWith("/library")
+      ? "library"
+      : !isFaculty && location.pathname.startsWith("/work")
+        ? "work"
+        : "ask";
   const [libraryMounted, setLibraryMounted] = useState(view === "library");
   if (view === "library" && !libraryMounted) setLibraryMounted(true);
+  const [workMounted, setWorkMounted] = useState(view === "work");
+  if (view === "work" && !workMounted) setWorkMounted(true);
   const name = nameFromEmail(auth.sub);
   // The one shelf choice both views follow: in the topbar on Library, at
   // the top of the history sidebar on Ask.
@@ -96,15 +104,18 @@ function AppShell({ auth }) {
           {/* On Ask the switcher sits in the history sidebar instead */}
           {view === "library" && switcher}
         </div>
-        {/* students have one destination, so no tabs */}
-        <nav className="nav" aria-label="Main" style={isFaculty ? undefined : { visibility: "hidden" }}>
+        <nav className="nav" aria-label="Main">
           <NavLink to="/" end onClick={(e) => go(e, "/")}>
             Ask
           </NavLink>
           {/* Library opens on whatever the switcher has picked ("All my shelves" = the overview) */}
-          {isFaculty && (
+          {isFaculty ? (
             <NavLink to="/library" onClick={(e) => go(e, "/library")}>
               Library
+            </NavLink>
+          ) : (
+            <NavLink to="/work" onClick={(e) => go(e, "/work")}>
+              Quizzes
             </NavLink>
           )}
         </nav>
@@ -154,8 +165,14 @@ function AppShell({ auth }) {
             />
           </div>
         )}
+        {workMounted && (
+          <div className={`view view-library${view === "work" ? "" : " is-hidden"}`} inert={view !== "work"}>
+            <MyAssessmentsPage auth={auth} active={view === "work"} />
+          </div>
+        )}
         <Routes>
           <Route path="/" element={null} />
+          <Route path="/work" element={isFaculty ? <Navigate to="/" replace /> : null} />
           <Route path="/library" element={isFaculty ? null : <Navigate to="/" replace />} />
           <Route path="/admin" element={<Navigate to="/library" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />

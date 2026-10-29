@@ -120,6 +120,30 @@ Upload → save file → `documents` row (status `queued`) → background job: *
   (`insert_document(document_id=...)`), bumping its version and notifying its readers. A note can't be published under the
   title of another document in the workspace (409), since uploads with an existing title replace it.
 
+## Question bank, quizzes and assignments (Phase 4)
+
+`app/api/assessments.py`, `app/assessments/` (`prompts.py`, `generate.py`, `assign.py`).
+
+- **Bank** (`questions`): per workspace; `subject`, `topic`, `type` (mcq/short/long), `difficulty` 1–3,
+  `body {prompt, options}`, `answer {correct, explanation}`, `source_chunk_ids`, `embedding`, `status` draft/approved.
+  Only approved questions are used. Any faculty member of the workspace can manage it.
+- **Generating** (`generate.py`) reads source chunks through `queries.search_source_chunks` (same scope filter as
+  notes), numbers each excerpt, and asks the model for JSON questions citing excerpt numbers (mapped back to chunk
+  ids). The bank's recent prompts are listed in the prompt to steer away from repeats; then any draft whose text is
+  within cosine 0.9 of a bank question or an earlier draft is dropped (`DUPLICATE_SIMILARITY`).
+- **Choosing** (`assign.py`, plain Python, `random.Random(seed)`; the seed is stored on the assessment):
+  - quotas per (topic, difficulty) are proportional to the pool, by largest remainder, so every set has the same mix;
+  - **assignment**: one set for the class, from questions no assignment with the same `rule_key`
+    (`lower(subject)|lower(term)`) uses. The partial unique index on `assessment_items (rule_key, question_id)
+    WHERE kind = 'assignment'` enforces it in the database too;
+  - **quiz**: one set per student; no two identical, and with `max_overlap` no two share more than that. Greedy,
+    preferring least-used questions, with retries; when it fails it reports a pool size that would be enough;
+  - question order and mcq option order are shuffled per set (`assessment_items.option_order`).
+- `POST /classrooms/{id}/assessments/check` runs the same planning without saving; the dialog uses it to show whether
+  the bank is big enough before Create.
+- **Students** get only their own items (`student_email = me` or class-wide), only while in the (unarchived) classroom,
+  with options in their order and **never** `answer`.
+
 ## Tracing (LangSmith, optional)
 
 `app/tracing.py`:
@@ -150,6 +174,11 @@ Upload → save file → `documents` row (status `queued`) → background job: *
 | `GET/PATCH/DELETE /notes/{id}` | Open, save (409 if saved by someone else since; `mark_up_to_date`), delete |
 | `POST /notes/{id}/redraft` | New draft of the whole note/deck or one `## ` section, from the sources' current versions; saves nothing |
 | `POST /notes/{id}/publish`, `GET /notes/{id}/download` | Publish/republish as a workspace doc (`.md` / `.pptx`); download the file |
+| `GET/POST /workspaces/{id}/questions`, `PATCH/DELETE /questions/{id}` | Question bank: list, write one (409 if a near-duplicate), edit/approve, delete (409 if used) |
+| `POST /workspaces/{id}/questions/generate`, `…/questions/status` | LLM drafts from sources (near-duplicates dropped); approve several at once |
+| `GET/POST /classrooms/{id}/assessments`, `POST …/assessments/check` | A classroom's quizzes/assignments; create; dry run (enough questions?) |
+| `GET/DELETE /assessments/{id}`, `POST /assessments/{id}/add-students` | Every set with answers; delete; sets for students who joined later |
+| `GET /my/assessments`, `GET /my/assessments/{id}` | Student: their quizzes/assignments and own questions, no answers |
 
 ## Code map
 
@@ -161,11 +190,14 @@ backend/app/
   ingestion/ parser.py, splitter.py, embedder.py, pipeline.py
   rag/       state.py, prompts.py, llm.py, chart_parser.py, nodes.py, graph.py, streaming.py
   api/       schemas.py, query.py, conversations.py, auth.py, admin_documents.py, notifications.py,
-             workspaces.py (workspaces, members, classrooms, /scopes), notes.py (notes and decks)
+             workspaces.py (workspaces, members, classrooms, /scopes), notes.py (notes and decks),
+             assessments.py (question bank, quizzes, assignments)
   authoring/ prompts.py, generate.py (drafts from sources), render.py (Markdown / .pptx)
+  assessments/ prompts.py, generate.py (questions from sources, de-duplication), assign.py (who gets which questions)
 backend/db/schema.sql          documents, chunks, conversations, messages, login_tokens,
                                users, document_events, notifications, notification_reads,
-                               workspaces, workspace_members, classrooms, classroom_members, notes
+                               workspaces, workspace_members, classrooms, classroom_members, notes,
+                               questions, assessments, assessment_items
 backend/scripts/               init_db.py, mint_dev_token.py, bulk_upload_docs.py
 frontend/src/
   App.jsx    signed-out routes, and the app shell (topbar + Ask / Library views; both stay mounted,
@@ -177,7 +209,9 @@ frontend/src/
   chat/      ChatPage (Ask: shelf, thread, desk, composer), History, AnswerBlock, ChartBlock
   library/   LibraryPage (shelves/list, needs attention, recent changes, tabs), DocumentDrawer,
              ClassroomsPanel, MembersPanel, NotesPanel (Notes & slides tab), NewNoteDialog,
-             NoteEditor (editor, redraft + compare, publish), noteState.js
+             NoteEditor (editor, redraft + compare, publish), noteState.js, SourcePicker
+  quizzes/   QuizzesPanel (workspace "Quizzes" tab), QuestionBank, QuestionDialog, GenerateQuestionsDialog,
+             AssessmentsPanel, NewAssessmentDialog, AssessmentView, ItemList, MyAssessmentsPage (student "Quizzes")
   ui/        Shelf.jsx (Spine, ShelfGroup, WsMark, SpineTooltip), spines.js, Icons.jsx, Logo.jsx,
              diff.js (line diff, note sections)
   styles/    theme.css   (ThemeContext.jsx = light/dark toggle)

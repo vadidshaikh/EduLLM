@@ -340,3 +340,79 @@ CREATE INDEX IF NOT EXISTS notes_workspace_id_updated_at_idx ON notes (workspace
 
 -- Notes generation reads the chunks of a few chosen documents.
 CREATE INDEX IF NOT EXISTS chunks_document_id_idx ON chunks (document_id);
+
+-- Phase 4 (mds/PLAN.md): question bank, quizzes and assignments.
+--
+-- Questions are drafted by the LLM from a workspace's sources (or written by
+-- hand) and only used once a faculty member approves them. `embedding` is
+-- the question's prompt, used to refuse near-duplicates (paraphrases would
+-- otherwise defeat the uniqueness rules below).
+--   body   = {"prompt", "options": [..]}      options only for mcq
+--   answer = {"correct": <option index>|null, "explanation"}
+-- Students never see `answer`.
+CREATE TABLE IF NOT EXISTS questions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id),
+    subject TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('mcq', 'short', 'long')),
+    difficulty INT NOT NULL CHECK (difficulty BETWEEN 1 AND 3),
+    body JSONB NOT NULL,
+    answer JSONB NOT NULL,
+    source_chunk_ids UUID[] NOT NULL DEFAULT '{}',
+    source_doc_ids UUID[] NOT NULL DEFAULT '{}',
+    embedding vector(768) NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'approved')),
+    created_by TEXT NOT NULL,
+    updated_by TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS questions_workspace_subject_idx ON questions (workspace_id, lower(subject));
+
+-- An assessment belongs to one classroom. `config` holds what it was built
+-- with ({count, topics, types, difficulties, max_overlap}); `seed` makes the
+-- choice of questions reproducible. `rule_key` = lower(subject) | term: an
+-- assignment's questions can't be used by another assignment with the same
+-- key (enforced by the unique index on assessment_items).
+CREATE TABLE IF NOT EXISTS assessments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    classroom_id UUID NOT NULL REFERENCES classrooms(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('quiz', 'assignment')),
+    title TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    rule_key TEXT NOT NULL,
+    config JSONB NOT NULL,
+    seed BIGINT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    due_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS assessments_classroom_id_idx ON assessments (classroom_id, created_at DESC);
+
+-- student_email is null for an assignment's class-wide items, set for a
+-- quiz's per-student ones. option_order is the shuffled order of an mcq's
+-- options as shown (indexes into body.options). kind and rule_key are
+-- copied from the assessment so the index below can enforce the
+-- no-repeat rule. Questions in use can't be deleted (no cascade).
+CREATE TABLE IF NOT EXISTS assessment_items (
+    assessment_id UUID NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+    student_email TEXT,
+    question_id UUID NOT NULL REFERENCES questions(id),
+    position INT NOT NULL,
+    option_order INT[],
+    kind TEXT NOT NULL,
+    rule_key TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS assessment_items_assignment_once_per_term_idx
+    ON assessment_items (rule_key, question_id) WHERE kind = 'assignment';
+
+CREATE UNIQUE INDEX IF NOT EXISTS assessment_items_position_idx
+    ON assessment_items (assessment_id, COALESCE(student_email, ''), position);
+
+CREATE INDEX IF NOT EXISTS assessment_items_student_idx ON assessment_items (student_email, assessment_id);
+
+CREATE INDEX IF NOT EXISTS assessment_items_question_id_idx ON assessment_items (question_id);

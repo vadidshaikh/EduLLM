@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ApiError, createNote, listNoteSources } from "../api/client";
 import Icon from "../ui/Icons";
+import SourcePicker from "./SourcePicker";
 
 const MAX_SOURCES = 8;
 
@@ -40,10 +41,6 @@ export default function NewNoteDialog({ token, workspaceId, initialKind, onClose
     return () => document.removeEventListener("keydown", onKey);
   }, [busy, onClose]);
 
-  function toggle(id, checked) {
-    setPicked((now) => (checked ? [...now, id] : now.filter((x) => x !== id)));
-  }
-
   async function submit(generate) {
     if (!topic.trim() || !picked.length || busy) return;
     setBusy(generate ? "draft" : "blank");
@@ -65,8 +62,6 @@ export default function NewNoteDialog({ token, workspaceId, initialKind, onClose
     }
   }
 
-  const own = docs?.filter((d) => d.workspace_id) ?? [];
-  const library = docs?.filter((d) => !d.workspace_id) ?? [];
   const ready = topic.trim() && picked.length > 0;
 
   return (
@@ -135,46 +130,7 @@ export default function NewNoteDialog({ token, workspaceId, initialKind, onClose
             <legend className="field-label">
               Write it from <span className="optional">up to {MAX_SOURCES} docs</span>
             </legend>
-            {docs === null ? (
-              <p className="form-note">Loading docs...</p>
-            ) : docs.length === 0 ? (
-              <p className="note-box">
-                There are no ready docs here or in the institute library yet. Upload some in the Docs tab first.
-              </p>
-            ) : (
-              <div className="source-pick">
-                {[
-                  ["This workspace", own],
-                  ["Institute library", library],
-                ].map(
-                  ([heading, rows]) =>
-                    rows.length > 0 && (
-                      <div key={heading}>
-                        <h4>{heading}</h4>
-                        <div className="publish">
-                          {rows.map((d) => {
-                            const checked = picked.includes(d.id);
-                            return (
-                              <label key={d.id}>
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  disabled={Boolean(busy) || (!checked && picked.length >= MAX_SOURCES)}
-                                  onChange={(e) => toggle(d.id, e.target.checked)}
-                                />
-                                <span>
-                                  <b>{d.title}</b>
-                                  {checked && <small>Cited as [{picked.indexOf(d.id) + 1}]</small>}
-                                </span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )
-                )}
-              </div>
-            )}
+            <SourcePicker docs={docs} picked={picked} onChange={setPicked} max={MAX_SOURCES} disabled={Boolean(busy)} cite />
           </fieldset>
 
           <div>

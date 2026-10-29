@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class QueryRequest(BaseModel):
@@ -331,3 +331,170 @@ class RedraftResponse(BaseModel):
 class PublishNoteRequest(BaseModel):
     visibility: Literal["workspace", "classrooms"]
     classroom_ids: list[UUID] = []
+
+
+# --- Question bank, quizzes and assignments (Phase 4) ---
+
+QuestionType = Literal["mcq", "short", "long"]
+
+
+class QuestionContent(BaseModel):
+    """A question as written or edited: options and correct only for mcq."""
+    type: QuestionType
+    difficulty: int = Field(2, ge=1, le=3)
+    prompt: str
+    options: list[str] = []
+    correct: int | None = None  # index into options
+    explanation: str = ""  # why the mcq answer is right / the model answer
+
+
+class QuestionOut(BaseModel):
+    id: UUID
+    workspace_id: UUID
+    subject: str
+    topic: str
+    type: QuestionType
+    difficulty: int
+    body: dict  # {prompt, options?}
+    answer: dict  # {correct, explanation}
+    source_doc_ids: list[UUID]
+    status: Literal["draft", "approved"]
+    use_count: int  # assessments it's in
+    created_by: str
+    created_by_name: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class GenerateQuestionsRequest(BaseModel):
+    subject: str
+    topic: str
+    source_doc_ids: list[UUID]
+    count: int = Field(10, ge=1, le=15)
+    types: list[QuestionType] = ["mcq", "short"]
+    difficulties: list[int] = [1, 2, 3]
+    instructions: str | None = None
+
+
+class GenerateQuestionsResponse(BaseModel):
+    questions: list[QuestionOut]  # the new drafts
+    duplicates: int  # drafts dropped as too close to an existing question
+
+
+class CreateQuestionRequest(QuestionContent):
+    subject: str
+    topic: str
+
+
+class UpdateQuestionRequest(BaseModel):
+    subject: str | None = None
+    topic: str | None = None
+    content: QuestionContent | None = None
+    status: Literal["draft", "approved"] | None = None
+
+
+class SetQuestionsStatusRequest(BaseModel):
+    question_ids: list[UUID]
+    status: Literal["draft", "approved"]
+
+
+class SetQuestionsStatusResponse(BaseModel):
+    changed: int
+
+
+class AssessmentConfig(BaseModel):
+    kind: Literal["quiz", "assignment"]
+    subject: str | None = None  # defaults to the classroom's subject
+    count: int = Field(ge=1, le=100)  # questions per set
+    topics: list[str] = []  # empty = any
+    types: list[QuestionType] = []
+    difficulties: list[int] = []
+    # Quizzes only: at most this many questions in common between any two
+    # students' sets. None = no cap (only identical sets are refused).
+    max_overlap: int | None = Field(None, ge=0)
+
+
+class CreateAssessmentRequest(AssessmentConfig):
+    title: str
+    due_at: datetime | None = None
+
+
+class ClassroomRuleOut(BaseModel):
+    id: UUID
+    name: str
+    has_assignment: bool
+
+
+class AssessmentCheckOut(BaseModel):
+    """Whether the bank can supply this assessment, before creating it."""
+    ok: bool
+    message: str
+    subject: str | None
+    available: int  # matching approved questions (for an assignment: not used by another this term)
+    needed: int | None  # questions that would be enough, when short
+    students: int
+    # Assignments: the classrooms with the same subject and term, which
+    # can't share questions.
+    sharing: list[ClassroomRuleOut] = []
+
+
+class AssessmentSummaryOut(BaseModel):
+    id: UUID
+    classroom_id: UUID
+    kind: Literal["quiz", "assignment"]
+    title: str
+    subject: str
+    config: dict
+    student_count: int  # quizzes: students with a set
+    created_by: str
+    created_by_name: str
+    created_at: datetime
+    due_at: datetime | None
+
+
+class AssessmentItemOut(BaseModel):
+    position: int
+    question_id: UUID
+    topic: str
+    type: QuestionType
+    difficulty: int
+    prompt: str
+    options: list[str]  # in the order this set shows them
+    correct: int | None  # index into `options` as shown
+    explanation: str
+
+
+class AssessmentSetOut(BaseModel):
+    student_email: str | None  # None: the whole class (assignment)
+    student_name: str | None
+    items: list[AssessmentItemOut]
+
+
+class AssessmentOut(AssessmentSummaryOut):
+    sets: list[AssessmentSetOut]
+    # Quizzes: students in the classroom now who have no set (joined later).
+    missing_students: list[str]
+
+
+class StudentAssessmentSummaryOut(BaseModel):
+    id: UUID
+    kind: Literal["quiz", "assignment"]
+    title: str
+    subject: str
+    classroom_id: UUID
+    classroom_name: str
+    question_count: int
+    due_at: datetime | None
+    created_at: datetime
+
+
+class StudentItemOut(BaseModel):
+    """A question as a student sees it: never the answer."""
+    position: int
+    type: QuestionType
+    prompt: str
+    options: list[str]
+
+
+class StudentAssessmentOut(StudentAssessmentSummaryOut):
+    items: list[StudentItemOut]

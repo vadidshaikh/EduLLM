@@ -65,6 +65,20 @@ def _context(claims: dict, query: str, sources: list[dict]) -> str:
     return "\n\n=====\n\n".join(blocks)
 
 
+def parse_json(raw: str) -> object:
+    """The model's JSON reply, or the first {...} in it if it added text
+    around it; None if neither parses.
+    """
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        match = _JSON_OBJECT.search(raw)
+        try:
+            return json.loads(match.group(0)) if match else None
+        except json.JSONDecodeError:
+            return None
+
+
 def _brief(title: str, topic: str, subject: str | None, instructions: str | None) -> str:
     lines = [f"Title: {title}", f"Topic: {topic}"]
     if subject:
@@ -74,7 +88,7 @@ def _brief(title: str, topic: str, subject: str | None, instructions: str | None
     return "\n".join(lines)
 
 
-def _ask(system: str, user: str, temperature: float = 0.3) -> str:
+def ask(system: str, user: str, temperature: float = 0.3) -> str:
     # Streamed and collected: a draft can take longer than the read timeout
     # of a blocking call.
     reply = "".join(
@@ -96,7 +110,7 @@ def draft_notes(
 ) -> str:
     """Markdown lecture notes on `topic`, citing sources as [n]."""
     context = _context(claims, topic, sources)
-    body = _ask(NOTES_PROMPT, f"{_brief(title, topic, subject, instructions)}\n\nSources:\n\n{context}")
+    body = ask(NOTES_PROMPT, f"{_brief(title, topic, subject, instructions)}\n\nSources:\n\n{context}")
     # The title is shown (and published) separately.
     return re.sub(r"^# .*\n+", "", body, count=1)
 
@@ -106,7 +120,7 @@ def redraft_section(claims: dict, *, title: str, topic: str, section: str, sourc
     """One `## ` section of a note, rewritten from the sources' current versions."""
     heading = section.strip().splitlines()[0].lstrip("# ").strip()
     context = _context(claims, f"{topic}: {heading}", sources)
-    return _ask(
+    return ask(
         SECTION_PROMPT,
         f"{_brief(title, topic, None, None)}\n\nSection to update:\n\n{section.strip()}\n\nSources:\n\n{context}",
     )
@@ -141,16 +155,8 @@ def draft_slides(
 ) -> list[dict]:
     """A slide outline on `topic`: [{title, bullets, notes}]."""
     context = _context(claims, topic, sources)
-    raw = _ask(SLIDES_PROMPT, f"{_brief(title, topic, subject, instructions)}\n\nSources:\n\n{context}", 0.2)
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        match = _JSON_OBJECT.search(raw)
-        try:
-            parsed = json.loads(match.group(0)) if match else None
-        except json.JSONDecodeError:
-            parsed = None
-    slides = clean_slides(parsed)
+    raw = ask(SLIDES_PROMPT, f"{_brief(title, topic, subject, instructions)}\n\nSources:\n\n{context}", 0.2)
+    slides = clean_slides(parse_json(raw))
     if not slides:
         logger.warning("draft_slides: unusable outline from the model: %.300s", raw)
         raise GenerationError("the model didn't return a usable outline; try again")

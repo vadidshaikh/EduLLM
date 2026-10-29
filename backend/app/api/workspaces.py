@@ -71,7 +71,7 @@ def _owned_shared_workspace(workspace_id: UUID, claims: dict) -> dict:
     return workspace
 
 
-def _managed_classroom(classroom_id: UUID, claims: dict) -> dict:
+def managed_classroom(classroom_id: UUID, claims: dict) -> dict:
     """The classroom if the caller is faculty in its workspace, otherwise 404."""
     classroom = queries.get_classroom(classroom_id)
     if classroom is None or queries.get_member_workspace(classroom["workspace_id"], claims["sub"]) is None:
@@ -211,7 +211,7 @@ def update_classroom(
     """Edits a classroom's details, or archives / restores it. Archiving
     hides the classroom's documents from its students straight away.
     """
-    _managed_classroom(classroom_id, claims)
+    managed_classroom(classroom_id, claims)
     return queries.update_classroom(
         classroom_id,
         name=_required_text(body.name, "name") if body.name is not None else None,
@@ -224,13 +224,13 @@ def update_classroom(
 @router.post("/classrooms/{classroom_id}/join-code", response_model=ClassroomOut)
 def regenerate_join_code(classroom_id: UUID, claims: dict = Depends(require_faculty)) -> ClassroomOut:
     """Issues a new join code; the old one stops working. Current students stay."""
-    _managed_classroom(classroom_id, claims)
+    managed_classroom(classroom_id, claims)
     return queries.regenerate_join_code(classroom_id)
 
 
 @router.get("/classrooms/{classroom_id}/students", response_model=list[ClassroomStudentOut])
 def list_students(classroom_id: UUID, claims: dict = Depends(require_faculty)) -> list[ClassroomStudentOut]:
-    _managed_classroom(classroom_id, claims)
+    managed_classroom(classroom_id, claims)
     return queries.list_classroom_students(classroom_id)
 
 
@@ -243,7 +243,7 @@ def add_students(
     names in a CSV) are ignored. Emails that aren't student addresses are
     returned in `rejected` rather than failing the whole request.
     """
-    _managed_classroom(classroom_id, claims)
+    managed_classroom(classroom_id, claims)
     tokens = [t.strip().strip("\"'<>").lower() for t in _EMAIL_SEPARATORS.split(body.emails)]
     candidates = list(dict.fromkeys(t for t in tokens if "@" in t))
     accepted = [e for e in candidates if _email_role(e) == "student"]
@@ -254,7 +254,7 @@ def add_students(
 
 @router.delete("/classrooms/{classroom_id}/students/{email}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_student(classroom_id: UUID, email: str, claims: dict = Depends(require_faculty)) -> None:
-    _managed_classroom(classroom_id, claims)
+    managed_classroom(classroom_id, claims)
     if not queries.remove_classroom_student(classroom_id, email.strip().lower()):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "student not in this classroom")
 
@@ -262,19 +262,19 @@ def remove_student(classroom_id: UUID, email: str, claims: dict = Depends(requir
 # --- Classrooms (student side) ---
 
 
-def _require_student(claims: dict = Depends(get_claims)) -> dict:
+def require_student(claims: dict = Depends(get_claims)) -> dict:
     if claims["role"] != "student":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "student access required")
     return claims
 
 
 @router.get("/classrooms", response_model=list[StudentClassroomOut])
-def list_my_classrooms(claims: dict = Depends(_require_student)) -> list[StudentClassroomOut]:
+def list_my_classrooms(claims: dict = Depends(require_student)) -> list[StudentClassroomOut]:
     return queries.list_student_classrooms(claims["sub"])
 
 
 @router.post("/classrooms/join", response_model=StudentClassroomOut)
-def join_classroom(body: JoinClassroomRequest, claims: dict = Depends(_require_student)) -> StudentClassroomOut:
+def join_classroom(body: JoinClassroomRequest, claims: dict = Depends(require_student)) -> StudentClassroomOut:
     """Joins the classroom with this code (case and spaces ignored)."""
     code = re.sub(r"\s+", "", body.code).upper()
     classroom = queries.find_active_classroom_by_code(code) if code else None
@@ -286,7 +286,7 @@ def join_classroom(body: JoinClassroomRequest, claims: dict = Depends(_require_s
 
 
 @router.delete("/classrooms/{classroom_id}/membership", status_code=status.HTTP_204_NO_CONTENT)
-def leave_classroom(classroom_id: UUID, claims: dict = Depends(_require_student)) -> None:
+def leave_classroom(classroom_id: UUID, claims: dict = Depends(require_student)) -> None:
     if not queries.remove_classroom_student(classroom_id, claims["sub"]):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "you're not in that classroom")
 
