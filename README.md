@@ -21,9 +21,9 @@ Then visit `http://localhost:5173` and sign in with your institute email (`first
 
 ## Next Steps
 
-- **First time setup?** → [STARTUP.md](STARTUP.md) — environment, dependencies, database
-- **How does it work?** → [ARCHITECTURE.md](ARCHITECTURE.md) — design, access control, tech stack
-- **Without Docker/services?** → [STARTUP.md#offline](STARTUP.md#offline) — local dev without Postgres
+- **Setup, config, troubleshooting** → [mds/SETUP.md](mds/SETUP.md)
+- **How it works** → [mds/ARCHITECTURE.md](mds/ARCHITECTURE.md)
+- **Open items** → [mds/TODO.md](mds/TODO.md)
 
 ## Key Files
 
@@ -31,7 +31,7 @@ Then visit `http://localhost:5173` and sign in with your institute email (`first
 |------|---------|
 | `backend/app/main.py` | FastAPI server |
 | `backend/app/rag/` | LangGraph Q&A pipeline |
-| `backend/db/queries.py` | All SQL + access control |
+| `backend/app/db/queries.py` | All SQL + access control |
 | `frontend/src/chat/` | Chat UI with sidebar |
 | `.env.example` | Config template |
 | `docker-compose.yml` | Services (Postgres, backend, frontend) |
@@ -39,4 +39,3 @@ Then visit `http://localhost:5173` and sign in with your institute email (`first
 ## Technologies
 
 FastAPI · LangGraph · React 19 · PostgreSQL + pgvector · NVIDIA API Catalog · Docker Compose
-w
