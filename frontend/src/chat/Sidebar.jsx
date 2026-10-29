@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { DeleteIcon, EditIcon, PinIcon } from "./Icons";
+import NotificationBell from "./NotificationBell";
 
 /**
  * Shows the list of past conversations with buttons to start/select chats
  * and a per-conversation actions menu.
  */
 export default function Sidebar({
+  token,
   conversations,
   activeConversationId,
   onSelect,
@@ -158,6 +160,7 @@ export default function Sidebar({
   if (collapsed) {
     return (
       <div className="sidebar sidebar-collapsed">
+        <NotificationBell token={token} />
         <button className="btn-secondary btn sidebar-toggle" onClick={() => setCollapsed(false)} title="Expand sidebar">
           »
         </button>
@@ -171,6 +174,7 @@ export default function Sidebar({
         <button className="btn new-chat-btn" onClick={onNewChat}>
           + New chat
         </button>
+        <NotificationBell token={token} />
         <button className="btn-secondary btn sidebar-toggle" onClick={() => setCollapsed(true)} title="Collapse sidebar">
           «
         </button>

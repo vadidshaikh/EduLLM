@@ -8,6 +8,7 @@ import {
   ApiError,
 } from "../api/client";
 import DocumentsTable from "./DocumentsTable";
+import ActivityDrawer from "./ActivityDrawer";
 import UploadForm from "./UploadForm";
 
 /**
@@ -20,6 +21,8 @@ export default function AdminPage({ auth }) {
   const [listError, setListError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
+  // null = closed; {document: null} = all activity; {document: {id, title}} = one document
+  const [activity, setActivity] = useState(null);
 
   /**
    * Fetches the latest list of documents from the server and updates the page, showing an error message if it fails.
@@ -128,6 +131,9 @@ export default function AdminPage({ auth }) {
         <div className="admin-panel">
           <div className="admin-panel-header">
             <h2>Documents</h2>
+            <button className="btn-secondary btn btn-inline" onClick={() => setActivity({ document: null })}>
+              Activity
+            </button>
           </div>
           <DocumentsTable
             documents={documents}
@@ -138,9 +144,13 @@ export default function AdminPage({ auth }) {
             onDelete={handleDelete}
             onRename={handleRename}
             onUpdateRoles={handleUpdateRoles}
+            onShowActivity={(doc) => setActivity({ document: { id: doc.id, title: doc.title } })}
           />
         </div>
       </div>
+      {activity && (
+        <ActivityDrawer token={auth.token} initialDocument={activity.document} onClose={() => setActivity(null)} />
+      )}
     </div>
   );
 }

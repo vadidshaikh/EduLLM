@@ -1,8 +1,16 @@
 import { useState } from "react";
 
 /**
+ * Formats a timestamp as a short date + time.
+ */
+function formatDateTime(iso) {
+  return new Date(iso).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
+}
+
+/**
  * Shows a table of uploaded documents with a rename control, classified
- * toggle, status and upload date, plus a delete button for each.
+ * toggle, status, who uploaded / last updated it, plus a delete button for
+ * each. Clicking a title opens that document's activity.
  */
 export default function DocumentsTable({
   documents,
@@ -13,6 +21,7 @@ export default function DocumentsTable({
   onDelete,
   onRename,
   onUpdateRoles,
+  onShowActivity,
 }) {
   if (error) {
     return (
@@ -39,7 +48,7 @@ export default function DocumentsTable({
         <col className="col-title" />
         <col className="col-classified" />
         <col className="col-status" />
-        <col className="col-uploaded" />
+        <col className="col-activity" />
         <col className="col-actions" />
       </colgroup>
       <thead>
@@ -47,7 +56,7 @@ export default function DocumentsTable({
           <th>Title</th>
           <th>Classified</th>
           <th>Status</th>
-          <th>Uploaded</th>
+          <th>Uploaded / updated</th>
           <th></th>
         </tr>
       </thead>
@@ -57,7 +66,11 @@ export default function DocumentsTable({
           return (
             <tr key={doc.id}>
               <td>
-                <DocumentTitleCell title={doc.title} onRename={(title) => onRename(doc.id, title)} />
+                <DocumentTitleCell
+                  title={doc.title}
+                  onRename={(title) => onRename(doc.id, title)}
+                  onShowActivity={() => onShowActivity(doc)}
+                />
               </td>
               <td>
                 <label className="classified-label">
@@ -74,11 +87,15 @@ export default function DocumentsTable({
               <td>
                 <StatusCell status={doc.status} progress={doc.progress} />
               </td>
-              <td className="uploaded-cell">
-                {new Date(doc.uploaded_at).toLocaleString(undefined, {
-                  dateStyle: "short",
-                  timeStyle: "short",
-                })}
+              <td className="activity-cell">
+                <div title={doc.uploaded_by}>
+                  {doc.uploaded_by_name || doc.uploaded_by} · {formatDateTime(doc.uploaded_at)}
+                </div>
+                {doc.updated_by && (
+                  <div className="activity-updated" title={doc.updated_by}>
+                    Updated by {doc.updated_by_name || doc.updated_by} · {formatDateTime(doc.updated_at)}
+                  </div>
+                )}
               </td>
               <td>
                 <button
@@ -122,10 +139,10 @@ function StatusCell({ status, progress }) {
 }
 
 /**
- * Shows a document's title as plain text with a rename button, swapping to
+ * Shows a document's title (click to see its activity) with a rename button, swapping to
  * an editable input (with save/cancel) when the button is clicked.
  */
-function DocumentTitleCell({ title, onRename }) {
+function DocumentTitleCell({ title, onRename, onShowActivity }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(title);
 
@@ -149,9 +166,9 @@ function DocumentTitleCell({ title, onRename }) {
   if (!editing) {
     return (
       <div className="title-cell">
-        <span className="title-text" title={title}>
+        <button className="title-text title-activity-link" title={`${title} — show activity`} onClick={onShowActivity}>
           {title}
-        </span>
+        </button>
         <button className="btn-link title-rename-btn" onClick={startEditing} aria-label="Rename document">
           Rename
         </button>

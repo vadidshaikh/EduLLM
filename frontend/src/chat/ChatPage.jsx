@@ -288,6 +288,7 @@ export default function ChatPage({ auth }) {
   return (
     <div className="chat-layout">
       <Sidebar
+        token={auth.token}
         conversations={conversations}
         activeConversationId={conversationId}
         onSelect={handleSelect}

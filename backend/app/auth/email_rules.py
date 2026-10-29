@@ -55,3 +55,15 @@ def parse_institute_email(email: str) -> dict:
         dept, year, division, section = match.groups()
         claims.update(dept=dept, year=year, division=division, section=section)
     return claims
+
+
+def display_name_from_email(email: str) -> str:
+    """Builds a placeholder display name from an email's local part, keeping
+    only the segments without digits (the student code isn't a name).
+
+    Example: "pawan.co23d1@scet.ac.in" -> "Pawan",
+             "jane.doe@scet.ac.in" -> "Jane Doe"
+    """
+    local = email.strip().lower().split("@", 1)[0]
+    words = [part for part in local.split(".") if part and not any(ch.isdigit() for ch in part)]
+    return " ".join(word.title() for word in words) or local
