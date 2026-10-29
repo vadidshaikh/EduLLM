@@ -10,6 +10,7 @@ import {
 } from "../api/client";
 import AnswerBlock from "./AnswerBlock";
 import Sidebar from "./Sidebar";
+import { EditIcon } from "./Icons";
 
 // How close to the bottom (in pixels) counts as "still at the bottom" for
 // auto-scroll purposes — small enough that a user who's actually scrolled
@@ -344,7 +345,7 @@ export default function ChatPage({ auth }) {
                           disabled={loading}
                           onClick={() => startEditMessage(message)}
                         >
-                          <img className="user-message-edit-icon" src="/rename.png" alt="Edit" />
+                          <EditIcon className="user-message-edit-icon" />
                         </button>
                       )}
                       <div className="user-message">{message.content}</div>

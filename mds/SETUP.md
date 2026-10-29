@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Python 3.11+ (conda)
+- Python 3.11+
 - Node.js 20+
 - Docker + Docker Compose (for Postgres)
 
@@ -13,8 +13,8 @@
 cp .env.example .env          # then fill in NVIDIA_API_KEY and JWT_SECRET
 
 # 2. Python env (run from repo root; first install is slow)
-conda create -n edullm python=3.11 -y
-conda activate edullm
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 
 # 3. Database
@@ -28,6 +28,9 @@ Generate a `JWT_SECRET` with:
 ## Run
 
 ```bash
+# Database (Postgres on port 5433; start it again after every reboot)
+docker compose up -d postgres
+
 # Backend (http://localhost:8000, health: /health)
 cd backend && uvicorn app.main:app --reload --reload-dir app
 
@@ -54,6 +57,7 @@ For curl testing without login: `python backend/scripts/mint_dev_token.py --sub 
 | Variable | Notes |
 |---|---|
 | `NVIDIA_API_KEY` | Required. From build.nvidia.com |
+| `NVIDIA_API_KEY_2`, `NVIDIA_API_KEY_3` | Optional backups, tried in order if the previous key is blank or fails |
 | `LLM_MODEL` | NVIDIA API Catalog model id |
 | `JWT_SECRET` | Required. Session token signing key |
 | `DATABASE_URL` | Default: Docker Postgres on port **5433** |
@@ -73,7 +77,7 @@ Full list: `.env.example`.
 | Port 5433 in use | Change the port in `docker-compose.yml` and `DATABASE_URL` |
 | Backend can't reach Postgres | Check `docker compose up -d postgres` is running, `DATABASE_URL` is right, and run `init_db.py` |
 | Frontend can't reach backend | Check `VITE_API_BASE_URL` |
-| "Model unavailable" answers | Check `NVIDIA_API_KEY` and `LLM_MODEL` |
+| "Model unavailable" answers | Check `NVIDIA_API_KEY` (and `_2`/`_3`) and `LLM_MODEL` |
 | No magic link in console | Look at the uvicorn output |
 | PDF ingestion fails | Try a simpler PDF or a Markdown file |
 | `backend/storage` missing | `mkdir -p backend/storage` (also created on first upload) |

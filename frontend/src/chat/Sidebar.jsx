@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { DeleteIcon, EditIcon, PinIcon } from "./Icons";
 
 /**
  * Shows the list of past conversations with buttons to start/select chats
@@ -203,7 +204,7 @@ export default function Sidebar({
             ) : (
               <span className="conversation-title">
                 {conversation.is_pinned ? <span className="conversation-pin" title="Pinned">
-                  <img className="conversation-menu-icon conversation-menu-icon-invert" src="/pin.png" alt="" aria-hidden="true" />
+                  <PinIcon className="conversation-menu-icon" />
                 </span> : null}
                 {conversation.title || "New conversation"}
               </span>
@@ -237,7 +238,7 @@ export default function Sidebar({
                 startRename(conversation);
               }}
             >
-              <img className="conversation-menu-icon conversation-menu-icon-invert" src="/rename.png" alt="" aria-hidden="true" />
+              <EditIcon className="conversation-menu-icon" />
               Rename
             </button>
             <button
@@ -249,7 +250,7 @@ export default function Sidebar({
                 }
               }}
             >
-              <img className="conversation-menu-icon" src="/delete.png" alt="" aria-hidden="true" />
+              <DeleteIcon className="conversation-menu-icon" />
               Delete
             </button>
             <button
@@ -259,7 +260,7 @@ export default function Sidebar({
                 closeMenu();
               }}
             >
-              <img className="conversation-menu-icon conversation-menu-icon-invert" src="/pin.png" alt="" aria-hidden="true" />
+              <PinIcon className="conversation-menu-icon" />
               {menuState.isPinned ? "Unpin" : "Pin"}
             </button>
           </div>,

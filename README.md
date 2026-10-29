@@ -8,8 +8,9 @@ A role-based RAG system where students only see documents tagged for them, and f
 
 ```bash
 # Terminal 1: backend
+docker compose up -d postgres   # DB on port 5433; needed after every reboot
+source .venv/bin/activate
 cd backend
-conda activate edullm
 uvicorn app.main:app --reload
 
 # Terminal 2: frontend
@@ -23,7 +24,7 @@ Then visit `http://localhost:5173` and sign in with your institute email (`first
 
 - **Setup, config, troubleshooting** → [mds/SETUP.md](mds/SETUP.md)
 - **How it works** → [mds/ARCHITECTURE.md](mds/ARCHITECTURE.md)
-- **Open items** → [mds/TODO.md](mds/TODO.md)
+- **Plan & open items** → [mds/PLAN.md](mds/PLAN.md)
 
 ## Key Files
 

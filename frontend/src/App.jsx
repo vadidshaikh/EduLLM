@@ -25,9 +25,11 @@ export default function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="topbar-brand-clip">
-          <img src="/image-nobg.png" alt="Edu LLM" className="topbar-brand" />
-        </div>
+        <img
+          src={theme === "dark" ? "/leaning-books-logo-dark.svg" : "/leaning-books-logo-light.svg"}
+          alt="Edu LLM"
+          className="topbar-brand"
+        />
         <nav className="topbar-nav">
           {auth.isAuthenticated && (
             <>

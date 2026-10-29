@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
 
     HF_TOKEN: str = ""
+    # Up to three NVIDIA API Catalog keys, tried in order. A blank or failing
+    # key is skipped; if all fail, the LLM fallback reply is used.
+    NVIDIA_API_KEY: str = ""
+    NVIDIA_API_KEY_2: str = ""
+    NVIDIA_API_KEY_3: str = ""
     LLM_MODEL: str = "meta/muse-glimmer-30b"
     EMBEDDING_MODEL: str = "sentence-transformers/multi-qa-mpnet-base-dot-v1"
 

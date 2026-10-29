@@ -44,7 +44,7 @@ load_history ─┬─ first turn → generate_title ─┐
 
 ### LLM (`app/rag/llm.py`)
 - `call_llm` (blocking) handles condense, classify, chart and title. `stream_llm` handles the answer.
-- If the NVIDIA call fails, a fallback runs instead of an error: condense echoes the question, the classifier says "no", chart generation returns `{}`, and the answer becomes "model unavailable". When streaming, the fallback is skipped once tokens have already been sent.
+- Up to three NVIDIA keys (`NVIDIA_API_KEY`, `_2`, `_3`) are tried in order; blank keys are skipped. If every key fails, a fallback runs instead of an error: condense echoes the question, the classifier says "no", chart generation returns `{}`, and the answer becomes "model unavailable". When streaming, neither the next key nor the fallback is tried once tokens have already been sent.
 
 ### Streaming (`POST /query/stream`)
 Returns newline-delimited JSON:

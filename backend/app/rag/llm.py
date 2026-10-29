@@ -25,23 +25,36 @@ def _to_chat_messages(messages: list[dict[str, str]]):
     return converted
 
 
+def _api_keys() -> list[tuple[int, str]]:
+    """Configured NVIDIA API keys as (slot number, key) in priority order,
+    blanks skipped. The slot number is only for logging - never log the key."""
+    keys = [settings.NVIDIA_API_KEY, settings.NVIDIA_API_KEY_2, settings.NVIDIA_API_KEY_3]
+    return [(slot, key) for slot, key in enumerate(keys, start=1) if key.strip()]
+
+
 def call_llm(
     messages: list[dict[str, str]],
     *,
     model: str | None = None,
     temperature: float | None = None,
 ) -> str:
-    """Sends a conversation to the configured AI language model and returns its text reply."""
+    """Sends a conversation to the configured AI language model and returns its text reply.
+
+    Each configured API key is tried in order; if all fail (or none are set),
+    the deterministic fallback reply is returned.
+    """
     kwargs = {}
     if temperature is not None:
         kwargs["temperature"] = temperature
-    try:
-        llm = ChatNVIDIA(model=model or settings.LLM_MODEL, **kwargs)
-        response = llm.invoke(_to_chat_messages(messages))
-        return response.content or ""
-    except Exception as exc:
-        logger.warning("NVIDIA chat completion failed for %s: %s", model or settings.LLM_MODEL, exc)
-        return _fallback_reply(messages)
+    model_name = model or settings.LLM_MODEL
+    for index, api_key in _api_keys():
+        try:
+            llm = ChatNVIDIA(model=model_name, api_key=api_key, **kwargs)
+            response = llm.invoke(_to_chat_messages(messages))
+            return response.content or ""
+        except Exception as exc:
+            logger.warning("NVIDIA chat completion failed for %s with key #%d: %s", model_name, index, exc)
+    return _fallback_reply(messages)
 
 
 def stream_llm(
@@ -53,25 +66,31 @@ def stream_llm(
     """Sends a conversation to the configured AI language model and yields
     its text reply incrementally as chunks arrive, instead of waiting for
     the full response like call_llm does.
+
+    Each configured API key is tried in order until one starts streaming.
     """
     kwargs = {}
     if temperature is not None:
         kwargs["temperature"] = temperature
+    model_name = model or settings.LLM_MODEL
 
     yielded_any = False
-    try:
-        llm = ChatNVIDIA(model=model or settings.LLM_MODEL, **kwargs)
-        for chunk in llm.stream(_to_chat_messages(messages)):
-            if chunk.content:
-                yielded_any = True
-                yield chunk.content
-    except Exception as exc:
-        logger.warning("NVIDIA streaming chat completion failed for %s: %s", model or settings.LLM_MODEL, exc)
-        # Only fall back if the failure happened before any real content
-        # went out — once tokens have already reached the client, silently
-        # appending the fallback sentence would just garble the answer.
-        if not yielded_any:
-            yield _fallback_reply(messages)
+    for index, api_key in _api_keys():
+        try:
+            llm = ChatNVIDIA(model=model_name, api_key=api_key, **kwargs)
+            for chunk in llm.stream(_to_chat_messages(messages)):
+                if chunk.content:
+                    yielded_any = True
+                    yield chunk.content
+            return
+        except Exception as exc:
+            logger.warning("NVIDIA streaming chat completion failed for %s with key #%d: %s", model_name, index, exc)
+            # Once tokens have already reached the client, retrying with
+            # another key or appending the fallback sentence would just
+            # garble the answer.
+            if yielded_any:
+                return
+    yield _fallback_reply(messages)
 
 
 def _fallback_reply(messages: list[dict[str, str]]) -> str:

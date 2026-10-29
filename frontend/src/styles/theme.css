@@ -134,18 +134,8 @@ select.input {
   flex-shrink: 0;
 }
 
-.topbar-brand-clip {
-  height: 40px;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  border-radius: 6px;
-}
-
 .topbar-brand {
-  /* Bump this height to "zoom" the logo — the fixed height/overflow on
-     .topbar-brand-clip keeps the navbar itself from growing. */
-  height: 59px;
+  height: 36px;
   width: auto;
   display: block;
 }
@@ -360,12 +350,7 @@ select.input {
 .conversation-menu-icon {
   width: 16px;
   height: 16px;
-  object-fit: contain;
   flex: 0 0 16px;
-}
-
-.conversation-menu-icon-invert {
-  filter: invert(1);
 }
 
 .conversation-menu-item:hover {
@@ -452,8 +437,6 @@ select.input {
 .user-message-edit-icon {
   width: 14px;
   height: 14px;
-  object-fit: contain;
-  filter: invert(1);
 }
 
 .user-message {
