@@ -43,6 +43,7 @@ export function useAuth() {
     token,
     role: claims?.role ?? null,
     sub: claims?.sub ?? null,
+    claims,
     isAuthenticated: Boolean(token && claims),
     login,
     logout,

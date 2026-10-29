@@ -1,23 +1,73 @@
 """All SQL for Edu LLM lives in this module — nowhere else issues a query.
 
 `search_chunks` is the access-control enforcement point: the
-`allowed_roles @> ARRAY[%s]::text[]` predicate (backed by the GIN index on
-chunks.allowed_roles) is the only thing standing between a student session
-and a faculty-only chunk. Review changes to that function hardest.
+`scope_ids && <user's scope ids>` predicate (backed by the GIN index on
+chunks.scope_ids) is the only thing standing between a session and a chunk
+it may not read. The user's scope ids come from `_user_scope_ids`, which
+reads the membership tables on every call (not the JWT, since membership
+changes during a session). Review changes to those two functions hardest.
 
 Every connection from the pool defaults to dict_row (configured in
 app/db/pool.py), so results here are dicts, not tuples.
 """
 from __future__ import annotations
 
+import secrets
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
 from pgvector import Vector
+from psycopg.errors import UniqueViolation
 from psycopg.types.json import Json
 
 from app.db.pool import pool
+
+# Fixed scope ids for the institute library, mirrored in db/schema.sql.
+# INSTITUTE is granted to everyone, ALL_FACULTY to every faculty member.
+INSTITUTE_SCOPE = UUID("00000000-0000-0000-0000-000000000001")
+ALL_FACULTY_SCOPE = UUID("00000000-0000-0000-0000-000000000002")
+
+# No 0/O, 1/I/L: join codes are read off a projector and typed by hand.
+_JOIN_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+_JOIN_CODE_LENGTH = 6
+
+
+def _user_scope_ids(conn: Any, email: str, role: str) -> list[UUID]:
+    """Every scope id the user can read, from the membership tables:
+    faculty get the institute scopes plus each workspace they belong to;
+    students get INSTITUTE plus each classroom they're in that isn't
+    archived. `role` must come from the verified JWT.
+    """
+    if role == "faculty":
+        rows = conn.execute(
+            "SELECT workspace_id AS id FROM workspace_members WHERE user_email = %s", (email,)
+        ).fetchall()
+        return [INSTITUTE_SCOPE, ALL_FACULTY_SCOPE, *(r["id"] for r in rows)]
+
+    rows = conn.execute(
+        """
+        SELECT cm.classroom_id AS id
+        FROM classroom_members cm
+        JOIN classrooms c ON c.id = cm.classroom_id
+        WHERE cm.user_email = %s AND c.archived_at IS NULL
+        """,
+        (email,),
+    ).fetchall()
+    return [INSTITUTE_SCOPE, *(r["id"] for r in rows)]
+
+
+def document_scope_ids(workspace_id: UUID | None, visibility: str, classroom_ids: list[UUID]) -> list[UUID]:
+    """The scope ids a document (and each of its chunks) carries:
+    institute library docs get INSTITUTE or ALL_FACULTY; workspace docs
+    always get the workspace id (its faculty can read them) plus the ids of
+    any classrooms they're published to.
+    """
+    if workspace_id is None:
+        return [INSTITUTE_SCOPE] if visibility == "institute" else [ALL_FACULTY_SCOPE]
+    if visibility == "classrooms":
+        return [workspace_id, *classroom_ids]
+    return [workspace_id]
 
 
 def _record_event(
@@ -34,10 +84,18 @@ def _record_event(
     conn.execute(
         """
         INSERT INTO document_events
-            (document_id, document_title, action, actor_email, actor_name, version)
-        VALUES (%s, %s, %s, %s, %s, %s)
+            (document_id, document_title, action, actor_email, actor_name, version, workspace_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         """,
-        (document["id"], document["title"], action, actor_email, actor_name, document["version"]),
+        (
+            document["id"],
+            document["title"],
+            action,
+            actor_email,
+            actor_name,
+            document["version"],
+            document["workspace_id"],
+        ),
     )
 
 
@@ -47,10 +105,10 @@ def _record_notification(
     kind: str,
     actor_email: str,
     actor_name: str,
-    audience: list[str],
+    audience: list[UUID],
 ) -> None:
-    """Creates one update/delete notice for everyone in `audience` (role
-    names in Phase 1). Same transaction rule as `_record_event`.
+    """Creates one update/delete notice for everyone holding any of the
+    `audience` scope ids. Same transaction rule as `_record_event`.
     """
     conn.execute(
         """
@@ -65,7 +123,7 @@ def _record_notification(
             document["version"],
             actor_email,
             actor_name,
-            Json(sorted(set(audience))),
+            Json(sorted({str(scope) for scope in audience})),
         ),
     )
 
@@ -75,29 +133,38 @@ def insert_document(
     title: str,
     filename: str,
     storage_path: str,
-    allowed_roles: list[str],
+    workspace_id: UUID | None,
+    visibility: str,
+    classroom_ids: list[UUID],
     file_hash: str,
     actor_email: str,
     actor_name: str,
 ) -> dict[str, Any]:
-    """Insert a new document, or if `title` already exists, bump its version
-    and replace its file metadata (re-upload case). Chunks are handled
-    separately by `replace_chunks` once ingestion finishes.
+    """Insert a new document, or if `title` already exists in the same
+    workspace (or the institute library), bump its version and replace its
+    file metadata and access (re-upload case). Chunks are handled separately
+    by `replace_chunks` once ingestion finishes.
 
     A new document is logged as `uploaded`. A re-upload is logged as
     `updated` and notifies everyone who could see the old or the new version.
     """
+    scope_ids = document_scope_ids(workspace_id, visibility, classroom_ids)
     with pool.connection() as conn:
         existing = conn.execute(
-            "SELECT id, version, allowed_roles FROM documents WHERE title = %s FOR UPDATE", (title,)
+            """
+            SELECT id, version, scope_ids FROM documents
+            WHERE title = %s AND workspace_id IS NOT DISTINCT FROM %s
+            FOR UPDATE
+            """,
+            (title, workspace_id),
         ).fetchone()
 
         if existing:
             row = conn.execute(
                 """
                 UPDATE documents
-                SET filename = %s, storage_path = %s, allowed_roles = %s,
-                    file_hash = %s, status = 'queued', progress = 0, version = %s,
+                SET filename = %s, storage_path = %s, visibility = %s, classroom_ids = %s,
+                    scope_ids = %s, file_hash = %s, status = 'queued', progress = 0, version = %s,
                     updated_by = %s, updated_at = now()
                 WHERE id = %s
                 RETURNING *
@@ -105,7 +172,9 @@ def insert_document(
                 (
                     filename,
                     storage_path,
-                    allowed_roles,
+                    visibility,
+                    classroom_ids,
+                    scope_ids,
                     file_hash,
                     existing["version"] + 1,
                     actor_email,
@@ -114,17 +183,28 @@ def insert_document(
             ).fetchone()
             _record_event(conn, row, "updated", actor_email, actor_name)
             _record_notification(
-                conn, row, "updated", actor_email, actor_name, existing["allowed_roles"] + allowed_roles
+                conn, row, "updated", actor_email, actor_name, existing["scope_ids"] + scope_ids
             )
         else:
             row = conn.execute(
                 """
                 INSERT INTO documents
-                    (title, filename, storage_path, allowed_roles, file_hash, uploaded_by)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                    (title, filename, storage_path, workspace_id, visibility, classroom_ids,
+                     scope_ids, file_hash, uploaded_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
-                (title, filename, storage_path, allowed_roles, file_hash, actor_email),
+                (
+                    title,
+                    filename,
+                    storage_path,
+                    workspace_id,
+                    visibility,
+                    classroom_ids,
+                    scope_ids,
+                    file_hash,
+                    actor_email,
+                ),
             ).fetchone()
             _record_event(conn, row, "uploaded", actor_email, actor_name)
 
@@ -132,10 +212,11 @@ def insert_document(
         return row
 
 
-def list_documents() -> list[dict[str, Any]]:
-    """Fetches every uploaded document, newest first, with the display names
-    of who uploaded and last updated it (falling back to the raw email for
-    actors with no users row, e.g. bulk imports).
+def list_documents(workspace_id: UUID | None) -> list[dict[str, Any]]:
+    """Fetches every document in one workspace (or, with None, the institute
+    library), newest first, with the display names of who uploaded and last
+    updated it (falling back to the raw email for actors with no users row,
+    e.g. bulk imports).
     """
     with pool.connection() as conn:
         return conn.execute(
@@ -146,8 +227,10 @@ def list_documents() -> list[dict[str, Any]]:
             FROM documents d
             LEFT JOIN users up ON up.email = d.uploaded_by
             LEFT JOIN users ud ON ud.email = d.updated_by
+            WHERE d.workspace_id IS NOT DISTINCT FROM %s
             ORDER BY d.uploaded_at DESC
-            """
+            """,
+            (workspace_id,),
         ).fetchall()
 
 
@@ -166,7 +249,7 @@ def delete_document(document_id: UUID, *, actor_email: str, actor_name: str) -> 
         row = conn.execute("DELETE FROM documents WHERE id = %s RETURNING *", (document_id,)).fetchone()
         if row is not None:
             _record_event(conn, row, "deleted", actor_email, actor_name)
-            _record_notification(conn, row, "deleted", actor_email, actor_name, row["allowed_roles"])
+            _record_notification(conn, row, "deleted", actor_email, actor_name, row["scope_ids"])
         conn.commit()
         return row
 
@@ -175,61 +258,78 @@ def update_document(
     document_id: UUID,
     *,
     title: str | None,
-    allowed_roles: list[str] | None,
+    visibility: str | None,
+    classroom_ids: list[UUID] | None,
     actor_email: str,
     actor_name: str,
 ) -> dict[str, Any] | None:
-    """Renames a document and/or changes which roles can access it, as one
-    audited `updated` event. A roles change is propagated onto the existing
-    chunks too (they carry a denormalized copy for `search_chunks`'s
-    access-control check), so it takes effect immediately without
-    re-ingestion. Everyone who could see the document before or after the
-    change is notified.
+    """Renames a document and/or changes who can read it, as one audited
+    `updated` event. `visibility` and `classroom_ids` change together (None
+    = leave access as is). An access change rewrites the scope ids on the
+    existing chunks too (they carry a denormalized copy for
+    `search_chunks`), so it takes effect immediately without re-embedding.
+    Everyone who could see the document before or after is notified.
     """
     with pool.connection() as conn:
         before = conn.execute(
-            "SELECT allowed_roles FROM documents WHERE id = %s FOR UPDATE", (document_id,)
+            "SELECT workspace_id, scope_ids FROM documents WHERE id = %s FOR UPDATE", (document_id,)
         ).fetchone()
         if before is None:
             return None
+
+        scope_ids = None
+        if visibility is not None:
+            scope_ids = document_scope_ids(before["workspace_id"], visibility, classroom_ids or [])
 
         row = conn.execute(
             """
             UPDATE documents
             SET title = COALESCE(%s, title),
-                allowed_roles = COALESCE(%s, allowed_roles),
+                visibility = COALESCE(%s, visibility),
+                classroom_ids = COALESCE(%s, classroom_ids),
+                scope_ids = COALESCE(%s, scope_ids),
                 updated_by = %s, updated_at = now()
             WHERE id = %s
             RETURNING *
             """,
-            (title, allowed_roles, actor_email, document_id),
+            (
+                title,
+                visibility,
+                (classroom_ids or []) if visibility is not None else None,
+                scope_ids,
+                actor_email,
+                document_id,
+            ),
         ).fetchone()
-        if allowed_roles is not None:
+        if scope_ids is not None:
             conn.execute(
-                "UPDATE chunks SET allowed_roles = %s WHERE document_id = %s",
-                (allowed_roles, document_id),
+                "UPDATE chunks SET scope_ids = %s WHERE document_id = %s",
+                (scope_ids, document_id),
             )
         _record_event(conn, row, "updated", actor_email, actor_name)
         _record_notification(
-            conn, row, "updated", actor_email, actor_name, before["allowed_roles"] + row["allowed_roles"]
+            conn, row, "updated", actor_email, actor_name, before["scope_ids"] + row["scope_ids"]
         )
         conn.commit()
         return row
 
 
-def list_all_document_events(limit: int) -> list[dict[str, Any]]:
-    """The most recent audit events across all documents, newest first,
-    including documents that have since been deleted.
+def list_all_document_events(workspace_id: UUID | None, limit: int) -> list[dict[str, Any]]:
+    """The most recent audit events for one workspace (or, with None, the
+    institute library), newest first, including documents that have since
+    been deleted.
     """
     with pool.connection() as conn:
         return conn.execute(
             """
-            SELECT id, document_id, document_title, action, actor_email, actor_name, version, created_at
+            SELECT id, document_id, document_title, action, actor_email, actor_name, version,
+                   workspace_id, created_at
             FROM document_events
+            WHERE workspace_id IS NOT DISTINCT FROM %s
             ORDER BY created_at DESC
             LIMIT %s
             """,
-            (limit,),
+            (workspace_id, limit),
         ).fetchall()
 
 
@@ -240,7 +340,8 @@ def list_document_events(document_id: UUID) -> list[dict[str, Any]]:
     with pool.connection() as conn:
         return conn.execute(
             """
-            SELECT id, document_id, document_title, action, actor_email, actor_name, version, created_at
+            SELECT id, document_id, document_title, action, actor_email, actor_name, version,
+                   workspace_id, created_at
             FROM document_events
             WHERE document_id = %s
             ORDER BY created_at DESC
@@ -280,19 +381,23 @@ def update_document_progress(document_id: UUID, progress: int) -> None:
         conn.commit()
 
 
-def replace_chunks(
-    document_id: UUID,
-    chunks: list[dict[str, Any]],
-    allowed_roles: list[str],
-) -> None:
-    """Delete existing chunks for this document and insert the new set.
+def replace_chunks(document_id: UUID, chunks: list[dict[str, Any]]) -> None:
+    """Delete existing chunks for this document and insert the new set,
+    tagged with the document's current scope ids. The document row is
+    locked while doing so, so an access change made while ingestion was
+    running can't be overwritten with the scope ids it started with.
     `chunks` items: {"chunk_text": str, "chunk_index": int, "embedding": list[float]}
     """
     with pool.connection() as conn:
+        document = conn.execute(
+            "SELECT scope_ids FROM documents WHERE id = %s FOR UPDATE", (document_id,)
+        ).fetchone()
+        if document is None:  # deleted while ingesting
+            return
         conn.execute("DELETE FROM chunks WHERE document_id = %s", (document_id,))
         conn.cursor().executemany(
             """
-            INSERT INTO chunks (document_id, chunk_text, chunk_index, embedding, allowed_roles)
+            INSERT INTO chunks (document_id, chunk_text, chunk_index, embedding, scope_ids)
             VALUES (%s, %s, %s, %s, %s)
             """,
             [
@@ -301,7 +406,7 @@ def replace_chunks(
                     c["chunk_text"],
                     c["chunk_index"],
                     Vector(c["embedding"]),
-                    allowed_roles,
+                    document["scope_ids"],
                 )
                 for c in chunks
             ],
@@ -309,22 +414,82 @@ def replace_chunks(
         conn.commit()
 
 
-def search_chunks(role: str, embedding: list[float], top_k: int) -> list[dict[str, Any]]:
-    """Role-filtered vector search. The WHERE clause is the entire access
-    control boundary: a chunk not tagged for `role` is never returned, and
-    therefore never reaches the LLM's context.
+def _readable_scopes(conn: Any, email: str, role: str, scope_id: UUID | None) -> list[UUID]:
+    """The scope ids a read may match: all of the user's, or just
+    `scope_id` when one is picked and the user actually holds it (otherwise
+    none). INSTITUTE_SCOPE stands for the whole institute library, so it
+    selects both institute-wide scopes the user holds (ALL_FACULTY too, for
+    faculty). Shared by `search_chunks` and `list_readable_documents` so the
+    chat and the shelf can never disagree about what a user can read.
+    """
+    scopes = _user_scope_ids(conn, email, role)
+    if scope_id == INSTITUTE_SCOPE:
+        return [s for s in scopes if s in (INSTITUTE_SCOPE, ALL_FACULTY_SCOPE)]
+    if scope_id is not None:
+        return [scope_id] if scope_id in scopes else []
+    return scopes
+
+
+def list_readable_documents(*, email: str, role: str, scope_id: UUID | None = None) -> list[dict[str, Any]]:
+    """The indexed documents the user can read (the books the chat can
+    answer from), optionally narrowed to one workspace or classroom, by
+    title. Same access rule as `search_chunks`, applied to documents.scope_ids.
     """
     with pool.connection() as conn:
+        scopes = _readable_scopes(conn, email, role, scope_id)
+        if not scopes:
+            return []
         return conn.execute(
             """
-            SELECT c.id, c.chunk_text, c.chunk_index, c.document_id, d.title
-            FROM chunks c
-            JOIN documents d ON d.id = c.document_id
-            WHERE c.allowed_roles @> ARRAY[%s]::text[]
-            ORDER BY c.embedding <=> %s
-            LIMIT %s
+            SELECT id, title FROM documents
+            WHERE scope_ids && %s::uuid[] AND status = 'indexed'
+            ORDER BY lower(title)
             """,
-            (role, Vector(embedding), top_k),
+            (scopes,),
+        ).fetchall()
+
+
+def search_chunks(
+    *,
+    email: str,
+    role: str,
+    embedding: list[float],
+    top_k: int,
+    scope_id: UUID | None = None,
+) -> list[dict[str, Any]]:
+    """Scope-filtered vector search. The WHERE clause is the entire access
+    control boundary: a chunk whose scope ids don't overlap the user's is
+    never returned, and therefore never reaches the LLM's context.
+
+    `scope_id` (a workspace or classroom picked in the chat) narrows the
+    search to that one scope; it only counts if the user actually holds it,
+    otherwise nothing is returned.
+
+    Iterative index scans stop the ivfflat index from returning fewer than
+    `top_k` rows when most of the nearest chunks are filtered out.
+    """
+    with pool.connection() as conn:
+        scopes = _readable_scopes(conn, email, role, scope_id)
+        if not scopes:
+            return []
+
+        conn.execute("SET LOCAL ivfflat.iterative_scan = relaxed_order")
+        return conn.execute(
+            """
+            WITH hits AS MATERIALIZED (
+                SELECT c.id, c.chunk_text, c.chunk_index, c.document_id,
+                       c.embedding <=> %s AS distance
+                FROM chunks c
+                WHERE c.scope_ids && %s::uuid[]
+                ORDER BY distance
+                LIMIT %s
+            )
+            SELECT h.id, h.chunk_text, h.chunk_index, h.document_id, d.title
+            FROM hits h
+            JOIN documents d ON d.id = h.document_id
+            ORDER BY h.distance
+            """,
+            (Vector(embedding), scopes, top_k),
         ).fetchall()
 
 
@@ -353,13 +518,30 @@ def get_conversation(conversation_id: UUID) -> dict[str, Any] | None:
 def list_conversations(user_email: str) -> list[dict[str, Any]]:
     """Fetches all of a user's conversations for display in the sidebar.
     Pinned conversations are shown first, then most recently updated.
+    `doc_ids` holds up to three documents its answers used, most recently
+    used first (the sidebar draws them as the conversation's stack of docs).
     """
     with pool.connection() as conn:
         return conn.execute(
             """
-            SELECT id, title, is_pinned, updated_at FROM conversations
-            WHERE user_email = %s
-            ORDER BY is_pinned DESC, updated_at DESC
+            SELECT c.id, c.title, c.is_pinned, c.updated_at,
+                   COALESCE((
+                       SELECT array_agg(used.doc_id ORDER BY used.last_used DESC)
+                       FROM (
+                           SELECT s->>'doc_id' AS doc_id, max(m.created_at) AS last_used
+                           FROM messages m
+                           CROSS JOIN LATERAL jsonb_array_elements(
+                               CASE WHEN jsonb_typeof(m.sources) = 'array' THEN m.sources ELSE '[]' END
+                           ) AS s
+                           WHERE m.conversation_id = c.id AND m.role = 'assistant'
+                           GROUP BY 1
+                           ORDER BY last_used DESC
+                           LIMIT 3
+                       ) used
+                   ), '{}') AS doc_ids
+            FROM conversations c
+            WHERE c.user_email = %s
+            ORDER BY c.is_pinned DESC, c.updated_at DESC
             """,
             (user_email,),
         ).fetchall()
@@ -573,13 +755,18 @@ def get_user(email: str) -> dict[str, Any] | None:
         return conn.execute("SELECT * FROM users WHERE email = %s", (email,)).fetchone()
 
 
-# --- Notifications (Phase 1, mds/PLAN.md) ---
+# --- Notifications (Phase 1, mds/PLAN.md; scope-based audience since Phase 2) ---
 #
 # Visibility is decided here and only here: a notification is shown to a
-# user when its audience includes their role and they weren't the actor.
-# There is deliberately no join-date filter, and no way to delete one.
+# user when its audience shares a scope id with them and they weren't the
+# actor. There is deliberately no join-date filter, and no way to delete one.
 
-_VISIBLE_TO_USER = "n.audience ? %(role)s AND n.actor_email <> %(email)s"
+_VISIBLE_TO_USER = "n.audience ?| %(scopes)s::text[] AND n.actor_email <> %(email)s"
+
+
+def _notification_params(conn: Any, email: str, role: str, **extra: Any) -> dict[str, Any]:
+    scopes = [str(scope) for scope in _user_scope_ids(conn, email, role)]
+    return {"email": email, "scopes": scopes, **extra}
 
 
 def list_notifications(email: str, role: str, limit: int) -> list[dict[str, Any]]:
@@ -598,7 +785,7 @@ def list_notifications(email: str, role: str, limit: int) -> list[dict[str, Any]
             ORDER BY n.created_at DESC
             LIMIT %(limit)s
             """,
-            {"email": email, "role": role, "limit": limit},
+            _notification_params(conn, email, role, limit=limit),
         ).fetchall()
 
 
@@ -615,7 +802,7 @@ def count_unread_notifications(email: str, role: str) -> int:
                   WHERE r.notification_id = n.id AND r.user_email = %(email)s
               )
             """,
-            {"email": email, "role": role},
+            _notification_params(conn, email, role),
         ).fetchone()
         return row["unread"]
 
@@ -633,6 +820,355 @@ def mark_notifications_read(email: str, role: str, notification_id: UUID | None 
               AND (%(id)s::uuid IS NULL OR n.id = %(id)s::uuid)
             ON CONFLICT DO NOTHING
             """,
-            {"email": email, "role": role, "id": notification_id},
+            _notification_params(conn, email, role, id=notification_id),
         )
         conn.commit()
+
+
+# --- Workspaces (Phase 2, mds/PLAN.md) ---
+#
+# Membership in a workspace is what grants a faculty member its scope id
+# (see _user_scope_ids). These functions don't check who is asking; the API
+# layer (app/api/workspaces.py) does that before calling them.
+
+_PERSONAL_WORKSPACE_NAME = "My workspace"
+
+_WORKSPACE_COLUMNS = """
+    w.id, w.name, w.kind, w.owner_email, w.created_at, m.role AS my_role,
+    (SELECT count(*) FROM workspace_members wm WHERE wm.workspace_id = w.id) AS member_count,
+    (SELECT count(*) FROM classrooms c
+     WHERE c.workspace_id = w.id AND c.archived_at IS NULL) AS classroom_count
+"""
+
+
+def ensure_personal_workspace(email: str) -> None:
+    """Creates the faculty member's personal workspace if they don't have
+    one yet. Safe to call on every login.
+    """
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            INSERT INTO workspaces (name, kind, owner_email)
+            VALUES (%s, 'personal', %s)
+            ON CONFLICT (owner_email) WHERE kind = 'personal' DO NOTHING
+            RETURNING id
+            """,
+            (_PERSONAL_WORKSPACE_NAME, email),
+        ).fetchone()
+        if row is not None:
+            conn.execute(
+                """
+                INSERT INTO workspace_members (workspace_id, user_email, role, added_by)
+                VALUES (%s, %s, 'owner', %s)
+                """,
+                (row["id"], email, email),
+            )
+        conn.commit()
+
+
+def list_workspaces(email: str) -> list[dict[str, Any]]:
+    """Every workspace the user is a member of: personal first, then shared
+    ones by name, each with the user's role and member/classroom counts.
+    """
+    with pool.connection() as conn:
+        return conn.execute(
+            f"""
+            SELECT {_WORKSPACE_COLUMNS}
+            FROM workspace_members m
+            JOIN workspaces w ON w.id = m.workspace_id
+            WHERE m.user_email = %s
+            ORDER BY w.kind = 'personal' DESC, lower(w.name)
+            """,
+            (email,),
+        ).fetchall()
+
+
+def get_member_workspace(workspace_id: UUID, email: str) -> dict[str, Any] | None:
+    """The workspace, with the user's role in it, or None if it doesn't
+    exist or the user isn't a member.
+    """
+    with pool.connection() as conn:
+        return conn.execute(
+            f"""
+            SELECT {_WORKSPACE_COLUMNS}
+            FROM workspace_members m
+            JOIN workspaces w ON w.id = m.workspace_id
+            WHERE m.workspace_id = %s AND m.user_email = %s
+            """,
+            (workspace_id, email),
+        ).fetchone()
+
+
+def create_shared_workspace(name: str, owner_email: str) -> UUID:
+    """Creates a shared workspace with `owner_email` as its owner."""
+    with pool.connection() as conn:
+        row = conn.execute(
+            "INSERT INTO workspaces (name, kind, owner_email) VALUES (%s, 'shared', %s) RETURNING id",
+            (name, owner_email),
+        ).fetchone()
+        conn.execute(
+            """
+            INSERT INTO workspace_members (workspace_id, user_email, role, added_by)
+            VALUES (%s, %s, 'owner', %s)
+            """,
+            (row["id"], owner_email, owner_email),
+        )
+        conn.commit()
+        return row["id"]
+
+
+def rename_workspace(workspace_id: UUID, name: str) -> None:
+    with pool.connection() as conn:
+        conn.execute("UPDATE workspaces SET name = %s WHERE id = %s", (name, workspace_id))
+        conn.commit()
+
+
+def delete_workspace(workspace_id: UUID) -> bool:
+    """Deletes a workspace with its members and classrooms, but only if it
+    has no documents left. Returns whether it was deleted.
+    """
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            DELETE FROM workspaces w
+            WHERE w.id = %s AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.workspace_id = w.id)
+            RETURNING id
+            """,
+            (workspace_id,),
+        ).fetchone()
+        conn.commit()
+        return row is not None
+
+
+def list_workspace_members(workspace_id: UUID) -> list[dict[str, Any]]:
+    """The workspace's faculty, owner first. `name` is null for people who
+    were added but haven't signed in yet.
+    """
+    with pool.connection() as conn:
+        return conn.execute(
+            """
+            SELECT m.user_email AS email, u.name, m.role, m.added_by, m.added_at
+            FROM workspace_members m
+            LEFT JOIN users u ON u.email = m.user_email
+            WHERE m.workspace_id = %s
+            ORDER BY m.role = 'owner' DESC, m.added_at
+            """,
+            (workspace_id,),
+        ).fetchall()
+
+
+def add_workspace_member(workspace_id: UUID, email: str, added_by: str) -> bool:
+    """Adds a faculty member as an editor. Returns False if they were
+    already a member.
+    """
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            INSERT INTO workspace_members (workspace_id, user_email, role, added_by)
+            VALUES (%s, %s, 'editor', %s)
+            ON CONFLICT DO NOTHING
+            RETURNING user_email
+            """,
+            (workspace_id, email, added_by),
+        ).fetchone()
+        conn.commit()
+        return row is not None
+
+
+def remove_workspace_member(workspace_id: UUID, email: str) -> bool:
+    """Removes an editor (never the owner). Returns whether a row went."""
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            DELETE FROM workspace_members
+            WHERE workspace_id = %s AND user_email = %s AND role <> 'owner'
+            RETURNING user_email
+            """,
+            (workspace_id, email),
+        ).fetchone()
+        conn.commit()
+        return row is not None
+
+
+# --- Classrooms (Phase 2, mds/PLAN.md) ---
+#
+# Membership in a classroom is what grants a student its scope id. Same
+# rule as workspaces: callers check permissions first.
+
+_CLASSROOM_COLUMNS = """
+    c.id, c.workspace_id, c.name, c.subject, c.term, c.join_code, c.created_by,
+    c.created_at, c.archived_at,
+    (SELECT count(*) FROM classroom_members cm WHERE cm.classroom_id = c.id) AS student_count
+"""
+
+
+def _new_join_code() -> str:
+    return "".join(secrets.choice(_JOIN_CODE_ALPHABET) for _ in range(_JOIN_CODE_LENGTH))
+
+
+def list_classrooms(workspace_id: UUID) -> list[dict[str, Any]]:
+    """A workspace's classrooms, active ones first, then by name."""
+    with pool.connection() as conn:
+        return conn.execute(
+            f"""
+            SELECT {_CLASSROOM_COLUMNS}
+            FROM classrooms c
+            WHERE c.workspace_id = %s
+            ORDER BY c.archived_at IS NOT NULL, lower(c.name)
+            """,
+            (workspace_id,),
+        ).fetchall()
+
+
+def get_classroom(classroom_id: UUID) -> dict[str, Any] | None:
+    with pool.connection() as conn:
+        return conn.execute(
+            f"SELECT {_CLASSROOM_COLUMNS} FROM classrooms c WHERE c.id = %s", (classroom_id,)
+        ).fetchone()
+
+
+def create_classroom(
+    *, workspace_id: UUID, name: str, subject: str | None, term: str | None, created_by: str
+) -> dict[str, Any]:
+    """Creates a classroom with a fresh join code, retrying on the (rare)
+    collision with an existing code.
+    """
+    for _ in range(5):
+        try:
+            with pool.connection() as conn:
+                row = conn.execute(
+                    """
+                    INSERT INTO classrooms (workspace_id, name, subject, term, join_code, created_by)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (workspace_id, name, subject, term, _new_join_code(), created_by),
+                ).fetchone()
+                conn.commit()
+            return get_classroom(row["id"])
+        except UniqueViolation:
+            continue
+    raise RuntimeError("could not generate a unique join code")
+
+
+def update_classroom(
+    classroom_id: UUID,
+    *,
+    name: str | None = None,
+    subject: str | None = None,
+    term: str | None = None,
+    archived: bool | None = None,
+) -> dict[str, Any] | None:
+    """Edits a classroom's details and/or archives / restores it. Fields
+    left as None are unchanged; pass "" to clear subject or term.
+    Archiving takes students' access away at once (see _user_scope_ids).
+    """
+    with pool.connection() as conn:
+        conn.execute(
+            """
+            UPDATE classrooms
+            SET name = COALESCE(%(name)s, name),
+                subject = CASE WHEN %(subject)s::text IS NULL THEN subject ELSE NULLIF(%(subject)s, '') END,
+                term = CASE WHEN %(term)s::text IS NULL THEN term ELSE NULLIF(%(term)s, '') END,
+                archived_at = CASE
+                    WHEN %(archived)s::boolean IS NULL THEN archived_at
+                    WHEN %(archived)s THEN COALESCE(archived_at, now())
+                    ELSE NULL
+                END
+            WHERE id = %(id)s
+            """,
+            {"id": classroom_id, "name": name, "subject": subject, "term": term, "archived": archived},
+        )
+        conn.commit()
+    return get_classroom(classroom_id)
+
+
+def regenerate_join_code(classroom_id: UUID) -> dict[str, Any] | None:
+    """Replaces a classroom's join code, e.g. after it leaked. Students
+    who already joined stay in.
+    """
+    for _ in range(5):
+        try:
+            with pool.connection() as conn:
+                conn.execute(
+                    "UPDATE classrooms SET join_code = %s WHERE id = %s",
+                    (_new_join_code(), classroom_id),
+                )
+                conn.commit()
+            return get_classroom(classroom_id)
+        except UniqueViolation:
+            continue
+    raise RuntimeError("could not generate a unique join code")
+
+
+def list_classroom_students(classroom_id: UUID) -> list[dict[str, Any]]:
+    """A classroom's students by email. `name` is null for students who
+    were added by a teacher but haven't signed in yet.
+    """
+    with pool.connection() as conn:
+        return conn.execute(
+            """
+            SELECT cm.user_email AS email, u.name, cm.added_by, cm.joined_at
+            FROM classroom_members cm
+            LEFT JOIN users u ON u.email = cm.user_email
+            WHERE cm.classroom_id = %s
+            ORDER BY cm.user_email
+            """,
+            (classroom_id,),
+        ).fetchall()
+
+
+def add_classroom_students(classroom_id: UUID, emails: list[str], added_by: str) -> int:
+    """Bulk-adds students. Returns how many were new to the classroom."""
+    with pool.connection() as conn:
+        added = 0
+        for email in emails:
+            row = conn.execute(
+                """
+                INSERT INTO classroom_members (classroom_id, user_email, added_by)
+                VALUES (%s, %s, %s)
+                ON CONFLICT DO NOTHING
+                RETURNING user_email
+                """,
+                (classroom_id, email, added_by),
+            ).fetchone()
+            added += row is not None
+        conn.commit()
+        return added
+
+
+def remove_classroom_student(classroom_id: UUID, email: str) -> bool:
+    with pool.connection() as conn:
+        row = conn.execute(
+            "DELETE FROM classroom_members WHERE classroom_id = %s AND user_email = %s RETURNING user_email",
+            (classroom_id, email),
+        ).fetchone()
+        conn.commit()
+        return row is not None
+
+
+def find_active_classroom_by_code(join_code: str) -> dict[str, Any] | None:
+    """The non-archived classroom with this join code, if any."""
+    with pool.connection() as conn:
+        return conn.execute(
+            f"SELECT {_CLASSROOM_COLUMNS} FROM classrooms c WHERE c.join_code = %s AND c.archived_at IS NULL",
+            (join_code,),
+        ).fetchone()
+
+
+def list_student_classrooms(email: str) -> list[dict[str, Any]]:
+    """The non-archived classrooms a student is in, with each one's
+    workspace name, by name.
+    """
+    with pool.connection() as conn:
+        return conn.execute(
+            f"""
+            SELECT {_CLASSROOM_COLUMNS}, w.name AS workspace_name
+            FROM classroom_members m
+            JOIN classrooms c ON c.id = m.classroom_id
+            JOIN workspaces w ON w.id = c.workspace_id
+            WHERE m.user_email = %s AND c.archived_at IS NULL
+            ORDER BY lower(c.name)
+            """,
+            (email,),
+        ).fetchall()

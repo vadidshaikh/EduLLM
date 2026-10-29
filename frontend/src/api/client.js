@@ -49,9 +49,14 @@ export function verifyMagicLink(token) {
 
 /**
  * Sends a user's question to the backend and returns the AI's answer for the given conversation.
+ * `scopeId` (a workspace or classroom id) narrows the search to one workspace or classroom; null searches everything.
  */
-export function queryLLM(token, conversationId, query) {
-  return request("/query", { method: "POST", token, body: { conversation_id: conversationId, query } });
+export function queryLLM(token, conversationId, query, scopeId = null) {
+  return request("/query", {
+    method: "POST",
+    token,
+    body: { conversation_id: conversationId, query, scope_id: scopeId },
+  });
 }
 
 /**
@@ -61,14 +66,19 @@ export function queryLLM(token, conversationId, query) {
  * Uses fetch + a manually-read stream (not EventSource) because EventSource can't send the
  * Authorization header this API requires.
  */
-export async function queryLLMStream(token, conversationId, query, { onStart, onToken, onDone, onError } = {}) {
+export async function queryLLMStream(
+  token,
+  conversationId,
+  query,
+  { scopeId = null, onStart, onToken, onDone, onError } = {}
+) {
   const headers = { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
 
   const res = await fetch(`${BASE_URL}/query/stream`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ conversation_id: conversationId, query }),
+    body: JSON.stringify({ conversation_id: conversationId, query, scope_id: scopeId }),
   });
 
   if (!res.ok || !res.body) {
@@ -143,20 +153,31 @@ export function updateConversation(token, conversationId, { title, isPinned }) {
 }
 
 /**
- * Fetches the list of documents uploaded to the admin panel.
+ * Builds "?workspace_id=..." for a workspace, or "" for the institute library (workspaceId null).
  */
-export function listDocuments(token) {
-  return request("/admin/documents", { token });
+function workspaceQuery(workspaceId) {
+  return workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : "";
 }
 
 /**
- * Uploads a file with a title and allowed roles to the backend as form data.
+ * Fetches the documents in one workspace, or in the institute library when workspaceId is null.
  */
-export function uploadDocument(token, { file, title, allowedRoles }) {
+export function listDocuments(token, workspaceId = null) {
+  return request(`/admin/documents${workspaceQuery(workspaceId)}`, { token });
+}
+
+/**
+ * Uploads a file as form data into a workspace (or the institute library when workspaceId is null).
+ * `visibility` is "institute" | "faculty" (library) or "workspace" | "classrooms" (workspace);
+ * `classroomIds` only with "classrooms".
+ */
+export function uploadDocument(token, { file, title, workspaceId = null, visibility, classroomIds = [] }) {
   const form = new FormData();
   form.append("file", file);
   form.append("title", title);
-  allowedRoles.forEach((role) => form.append("allowed_roles", role));
+  form.append("visibility", visibility);
+  if (workspaceId) form.append("workspace_id", workspaceId);
+  classroomIds.forEach((id) => form.append("classroom_ids", id));
   return request("/admin/documents", { method: "POST", token, body: form, isForm: true });
 }
 
@@ -168,13 +189,13 @@ export function deleteDocument(token, documentId) {
 }
 
 /**
- * Changes which roles can access an existing document.
+ * Changes who can read an existing document (same visibility values as uploadDocument).
  */
-export function updateDocumentRoles(token, documentId, allowedRoles) {
+export function updateDocumentAccess(token, documentId, { visibility, classroomIds = [] }) {
   return request(`/admin/documents/${documentId}`, {
     method: "PATCH",
     token,
-    body: { allowed_roles: allowedRoles },
+    body: { visibility, classroom_ids: classroomIds },
   });
 }
 
@@ -190,10 +211,11 @@ export function renameDocument(token, documentId, title) {
 }
 
 /**
- * Fetches recent audit events across all documents (deleted ones included), newest first.
+ * Fetches recent audit events for one workspace's documents (or the institute library's when
+ * workspaceId is null), deleted ones included, newest first.
  */
-export function listAllDocumentEvents(token) {
-  return request("/admin/document-events", { token });
+export function listAllDocumentEvents(token, workspaceId = null) {
+  return request(`/admin/document-events${workspaceQuery(workspaceId)}`, { token });
 }
 
 /**
@@ -222,6 +244,112 @@ export function markNotificationRead(token, notificationId) {
  */
 export function markAllNotificationsRead(token) {
   return request("/notifications/read-all", { method: "POST", token });
+}
+
+/**
+ * Fetches the ready documents the user can ask about ({id, title}), all of them or only one
+ * workspace / classroom (scopeId). Works for students and faculty.
+ */
+export function listReadableDocuments(token, scopeId = null) {
+  return request(`/documents${scopeId ? `?scope_id=${encodeURIComponent(scopeId)}` : ""}`, { token });
+}
+
+// --- Workspaces (faculty) ---
+
+/**
+ * Fetches the faculty member's workspaces, personal first.
+ */
+export function listWorkspaces(token) {
+  return request("/workspaces", { token });
+}
+
+export function createWorkspace(token, name) {
+  return request("/workspaces", { method: "POST", token, body: { name } });
+}
+
+export function renameWorkspace(token, workspaceId, name) {
+  return request(`/workspaces/${workspaceId}`, { method: "PATCH", token, body: { name } });
+}
+
+/**
+ * Deletes an empty shared workspace (the backend refuses while it still has documents).
+ */
+export function deleteWorkspace(token, workspaceId) {
+  return request(`/workspaces/${workspaceId}`, { method: "DELETE", token });
+}
+
+export function listWorkspaceMembers(token, workspaceId) {
+  return request(`/workspaces/${workspaceId}/members`, { token });
+}
+
+/**
+ * Adds a faculty member to a shared workspace by email. Returns {added, invited}.
+ */
+export function addWorkspaceMember(token, workspaceId, email) {
+  return request(`/workspaces/${workspaceId}/members`, { method: "POST", token, body: { email } });
+}
+
+/**
+ * Removes a member (owner only), or leaves the workspace when `email` is your own.
+ */
+export function removeWorkspaceMember(token, workspaceId, email) {
+  return request(`/workspaces/${workspaceId}/members/${encodeURIComponent(email)}`, { method: "DELETE", token });
+}
+
+// --- Classrooms (faculty) ---
+
+export function listClassrooms(token, workspaceId) {
+  return request(`/workspaces/${workspaceId}/classrooms`, { token });
+}
+
+export function createClassroom(token, workspaceId, { name, subject, term }) {
+  return request(`/workspaces/${workspaceId}/classrooms`, { method: "POST", token, body: { name, subject, term } });
+}
+
+/**
+ * Edits a classroom's name/subject/term and/or archives it ({archived: true}) or restores it.
+ */
+export function updateClassroom(token, classroomId, changes) {
+  return request(`/classrooms/${classroomId}`, { method: "PATCH", token, body: changes });
+}
+
+/**
+ * Replaces a classroom's join code; the old code stops working.
+ */
+export function regenerateJoinCode(token, classroomId) {
+  return request(`/classrooms/${classroomId}/join-code`, { method: "POST", token });
+}
+
+export function listClassroomStudents(token, classroomId) {
+  return request(`/classrooms/${classroomId}/students`, { token });
+}
+
+/**
+ * Bulk-adds students from pasted text (emails, or CSV). Returns {added, already_in, rejected}.
+ */
+export function addClassroomStudents(token, classroomId, emails) {
+  return request(`/classrooms/${classroomId}/students`, { method: "POST", token, body: { emails } });
+}
+
+export function removeClassroomStudent(token, classroomId, email) {
+  return request(`/classrooms/${classroomId}/students/${encodeURIComponent(email)}`, { method: "DELETE", token });
+}
+
+// --- Classrooms (students) ---
+
+/**
+ * Fetches the classrooms the student has joined.
+ */
+export function listMyClassrooms(token) {
+  return request("/classrooms", { token });
+}
+
+export function joinClassroom(token, code) {
+  return request("/classrooms/join", { method: "POST", token, body: { code } });
+}
+
+export function leaveClassroom(token, classroomId) {
+  return request(`/classrooms/${classroomId}/membership`, { method: "DELETE", token });
 }
 
 export { ApiError };

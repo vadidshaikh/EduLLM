@@ -26,7 +26,9 @@ def query(body: QueryRequest, claims: dict = Depends(get_claims)) -> QueryRespon
 
     result = graph.invoke(
         {
+            "user_email": claims["sub"],
             "role": claims["role"],
+            "scope_id": str(body.scope_id) if body.scope_id else None,
             "query": body.query,
             "conversation_id": conversation_id,
             "messages": [{"role": "user", "content": body.query}],
@@ -57,7 +59,9 @@ def query_stream(body: QueryRequest, claims: dict = Depends(get_claims)) -> Stre
         yield json.dumps({"type": "start", "conversation_id": str(conversation_id)}) + "\n"
         try:
             for event in run_query_stream(
+                user_email=claims["sub"],
                 role=claims["role"],
+                scope_id=str(body.scope_id) if body.scope_id else None,
                 query=body.query,
                 conversation_id=str(conversation_id),
             ):

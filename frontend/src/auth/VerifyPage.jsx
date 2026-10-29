@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { verifyMagicLink, ApiError } from "../api/client";
+import { LoginLayout } from "./EmailLoginPage";
 
 /**
- * Shows a "signing you in" message while it checks the sign-in link's token, then redirects to the chat page on success or shows an error.
+ * Exchanges the sign-in link's token for a session, then goes to Ask; shows an error if the link is bad.
  */
 export default function VerifyPage({ auth }) {
   const [searchParams] = useSearchParams();
@@ -29,18 +30,20 @@ export default function VerifyPage({ auth }) {
   const displayError = error || (!token ? "Missing sign-in token." : "");
 
   return (
-    <div className="page">
-      <div className="login-container">
-        <h1>Signing you in</h1>
+    <LoginLayout>
+      <div className="login-card">
+        <h1>{displayError ? "That link didn't work" : "Signing you in"}</h1>
         {displayError ? (
           <>
-            <div className="status-line error">{displayError}</div>
-            <Link to="/login">Back to sign in</Link>
+            <p className="sub">{displayError} Links work once, for 15 minutes.</p>
+            <Link className="link" to="/login">
+              Send a new link
+            </Link>
           </>
         ) : (
-          <p className="dev-note">One moment...</p>
+          <p className="sub">One moment...</p>
         )}
       </div>
-    </div>
+    </LoginLayout>
   );
 }

@@ -55,5 +55,7 @@ def verify_login(body: VerifyRequest) -> TokenResponse:
         year=claims.get("year"),
         division=claims.get("division"),
     )
+    if claims["role"] == "faculty":
+        queries.ensure_personal_workspace(email)
     access_token = create_session_token(claims, settings.SESSION_JWT_EXPIRY_DAYS)
     return TokenResponse(access_token=access_token)

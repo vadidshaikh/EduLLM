@@ -48,7 +48,7 @@ To run everything in Docker instead: `docker compose up`.
    - Student: `name.co23d1@scet.ac.in`
 2. With `RESEND_API_KEY` blank, the magic link is printed in the **backend console**. Open it to sign in.
 3. To log in with a non-institute email as faculty (dev only), add it to `DEV_FACULTY_EMAILS`.
-4. Faculty can upload documents at `/admin`.
+4. Faculty manage documents, workspaces and classrooms under **Library** (`/library`). Students join a classroom from the shelf switcher at the top, with its code.
 
 For curl testing without login: `python backend/scripts/mint_dev_token.py --sub prof@scet.ac.in --role faculty`
 
@@ -75,6 +75,7 @@ Full list: `.env.example`.
 | Problem | Fix |
 |---|---|
 | Port 5433 in use | Change the port in `docker-compose.yml` and `DATABASE_URL` |
+| `column "scope_ids" does not exist` (or similar) after pulling | Run `python backend/scripts/init_db.py`; it migrates the schema in place and is safe to re-run |
 | Backend can't reach Postgres | Check `docker compose up -d postgres` is running, `DATABASE_URL` is right, and run `init_db.py` |
 | Frontend can't reach backend | Check `VITE_API_BASE_URL` |
 | "Model unavailable" answers | Check `NVIDIA_API_KEY` (and `_2`/`_3`) and `LLM_MODEL` |

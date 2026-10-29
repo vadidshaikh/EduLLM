@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -8,6 +8,10 @@ from pydantic import BaseModel
 class QueryRequest(BaseModel):
     conversation_id: UUID | None = None
     query: str
+    # A workspace or classroom id to search only that scope, or the
+    # INSTITUTE scope id (…0001) for the institute library; None searches
+    # everything the user can read.
+    scope_id: UUID | None = None
 
 
 class SourceOut(BaseModel):
@@ -27,6 +31,7 @@ class ConversationOut(BaseModel):
     title: str | None
     is_pinned: bool
     updated_at: datetime
+    doc_ids: list[str] = []  # up to 3 docs its answers used, most recent first
 
 
 class UpdateConversationRequest(BaseModel):
@@ -62,7 +67,9 @@ class TokenResponse(BaseModel):
 class DocumentOut(BaseModel):
     id: UUID
     title: str
-    allowed_roles: list[str]
+    workspace_id: UUID | None
+    visibility: str
+    classroom_ids: list[UUID]
     status: str
     progress: int
     version: int
@@ -81,7 +88,9 @@ class UploadResponse(BaseModel):
 
 class UpdateDocumentRequest(BaseModel):
     title: str | None = None
-    allowed_roles: list[str] | None = None
+    # Change access: both together. classroom_ids only with "classrooms".
+    visibility: Literal["institute", "faculty", "workspace", "classrooms"] | None = None
+    classroom_ids: list[UUID] = []
 
 
 class DocumentEventOut(BaseModel):
@@ -92,6 +101,7 @@ class DocumentEventOut(BaseModel):
     actor_email: str
     actor_name: str
     version: int
+    workspace_id: UUID | None
     created_at: datetime
 
 
@@ -109,3 +119,111 @@ class NotificationOut(BaseModel):
 class NotificationsResponse(BaseModel):
     unread_count: int
     notifications: list[NotificationOut]
+
+
+class WorkspaceOut(BaseModel):
+    id: UUID
+    name: str
+    kind: str
+    owner_email: str
+    my_role: str
+    member_count: int
+    classroom_count: int
+    created_at: datetime
+
+
+class CreateWorkspaceRequest(BaseModel):
+    name: str
+
+
+class UpdateWorkspaceRequest(BaseModel):
+    name: str
+
+
+class WorkspaceMemberOut(BaseModel):
+    email: str
+    name: str | None
+    role: str
+    added_by: str
+    added_at: datetime
+
+
+class AddMemberRequest(BaseModel):
+    email: str
+
+
+class AddMemberResponse(BaseModel):
+    added: bool
+    invited: bool  # True when an invite email was sent (no account yet)
+
+
+class ClassroomOut(BaseModel):
+    id: UUID
+    workspace_id: UUID
+    name: str
+    subject: str | None
+    term: str | None
+    join_code: str
+    created_by: str
+    created_at: datetime
+    archived_at: datetime | None
+    student_count: int
+
+
+class StudentClassroomOut(BaseModel):
+    """A classroom as a student sees it: no join code or member list."""
+    id: UUID
+    name: str
+    subject: str | None
+    term: str | None
+    workspace_name: str
+
+
+class CreateClassroomRequest(BaseModel):
+    name: str
+    subject: str | None = None
+    term: str | None = None
+
+
+class UpdateClassroomRequest(BaseModel):
+    name: str | None = None
+    subject: str | None = None
+    term: str | None = None
+    archived: bool | None = None
+
+
+class ClassroomStudentOut(BaseModel):
+    email: str
+    name: str | None
+    added_by: str | None
+    joined_at: datetime
+
+
+class AddStudentsRequest(BaseModel):
+    # Free text pasted from a sheet or CSV: emails separated by commas,
+    # semicolons, whitespace or new lines.
+    emails: str
+
+
+class AddStudentsResponse(BaseModel):
+    added: int
+    already_in: int
+    rejected: list[str]  # not recognisable as student emails
+
+
+class JoinClassroomRequest(BaseModel):
+    code: str
+
+
+class ReadableDocumentOut(BaseModel):
+    """A document as anyone who can read it sees it: no access details."""
+    id: UUID
+    title: str
+
+
+class ScopeOut(BaseModel):
+    """One option in the chat's "search in" picker."""
+    id: UUID
+    kind: str  # personal | shared | classroom
+    name: str
+    detail: str | None = None

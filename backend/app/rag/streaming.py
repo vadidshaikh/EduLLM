@@ -5,7 +5,9 @@ from app.rag.graph import graph
 from app.tracing import conversation_trace_config
 
 
-def run_query_stream(*, role: str, query: str, conversation_id: str) -> Iterator[dict[str, Any]]:
+def run_query_stream(
+    *, user_email: str, role: str, scope_id: str | None, query: str, conversation_id: str
+) -> Iterator[dict[str, Any]]:
     """Runs the question through the same compiled graph as app/rag/graph.py
     (so LangSmith traces this as one real LangGraph run, with the proper
     node-graph structure, instead of a hand-rolled chain), streaming the
@@ -18,7 +20,9 @@ def run_query_stream(*, role: str, query: str, conversation_id: str) -> Iterator
          "user_message_id", "assistant_message_id"}                exactly one, last
     """
     initial_state = {
+        "user_email": user_email,
         "role": role,
+        "scope_id": scope_id,
         "query": query,
         "conversation_id": conversation_id,
         "messages": [{"role": "user", "content": query}],

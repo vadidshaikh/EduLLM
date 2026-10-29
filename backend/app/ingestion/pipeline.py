@@ -29,18 +29,15 @@ _EMBED_DONE_PROGRESS = 90
     tags=["ingestion", "indexing"],
     # chunk_rows carries the chunk text plus its embedding vector for every
     # chunk in the document - only the count is worth sending to LangSmith.
-    process_inputs=lambda inputs: {
-        "chunk_count": len(inputs.get("chunk_rows", [])),
-        "allowed_roles": inputs.get("allowed_roles"),
-    },
+    process_inputs=lambda inputs: {"chunk_count": len(inputs.get("chunk_rows", []))},
 )
-def _index_chunks(document_id: UUID, chunk_rows: list[dict[str, Any]], allowed_roles: list[str]) -> None:
+def _index_chunks(document_id: UUID, chunk_rows: list[dict[str, Any]]) -> None:
     """Replaces a document's chunks in the database, making it searchable -
     the "indexing" stage of ingestion. Kept as a thin traced wrapper around
     queries.replace_chunks rather than tracing that function directly, since
     app/db/queries.py is shared by unrelated (untraced) call sites.
     """
-    queries.replace_chunks(document_id, chunk_rows, allowed_roles)
+    queries.replace_chunks(document_id, chunk_rows)
 
 
 @traceable(name="ingest_document", run_type="chain", tags=["ingestion"])
@@ -80,7 +77,7 @@ def run_ingestion(document_id: UUID) -> None:
             {"chunk_text": chunk, "chunk_index": i, "embedding": embedding}
             for i, (chunk, embedding) in enumerate(zip(chunks, embeddings))
         ]
-        _index_chunks(document_id, chunk_rows, document["allowed_roles"])
+        _index_chunks(document_id, chunk_rows)
         queries.update_document_status(document_id, "indexed", progress=100)
     except Exception:
         logger.exception("run_ingestion failed for document %s", document_id)

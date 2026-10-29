@@ -7,14 +7,17 @@ runs ingestion. Use this to pre-populate the RAG system with documents on
 first setup.
 
 Usage:
-    python scripts/bulk_upload_docs.py [--roles student,faculty] [--dry-run]
+    python scripts/bulk_upload_docs.py [--visibility institute|faculty] [--dry-run]
+
+Documents go into the institute library (no workspace). Use the Library page
+to upload into a workspace or publish to classrooms.
 
 Examples:
-    # Upload all to both student and faculty
+    # Faculty only (default)
     python scripts/bulk_upload_docs.py
 
-    # Student access only
-    python scripts/bulk_upload_docs.py --roles student
+    # Everyone: students and faculty
+    python scripts/bulk_upload_docs.py --visibility institute
 
     # Preview what would be uploaded without actually uploading
     python scripts/bulk_upload_docs.py --dry-run
@@ -38,9 +41,10 @@ def main() -> None:
     """Read every PDF from the docs/ folder and upload each one into the database, optionally previewing first with --dry-run."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--roles",
+        "--visibility",
+        choices=["institute", "faculty"],
         default="faculty",
-        help="Comma-separated roles that can access these docs (default: faculty). Use 'student,faculty' for both.",
+        help="Who can read these docs: 'faculty' (default) or 'institute' (everyone).",
     )
     parser.add_argument(
         "--dry-run",
@@ -59,8 +63,7 @@ def main() -> None:
         print(f"No PDFs found in {docs_dir}")
         return
 
-    roles = [r.strip() for r in args.roles.split(",")]
-    print(f"Found {len(pdfs)} PDF(s) to upload with roles: {roles}")
+    print(f"Found {len(pdfs)} PDF(s) to upload with visibility: {args.visibility}")
 
     if args.dry_run:
         print("\n[DRY RUN] Would upload:")
@@ -80,7 +83,9 @@ def main() -> None:
                     title=pdf.stem,  # filename without extension as title
                     filename=pdf.name,
                     storage_path=str(storage_path),
-                    allowed_roles=roles,
+                    workspace_id=None,
+                    visibility=args.visibility,
+                    classroom_ids=[],
                     file_hash=file_hash,
                     actor_email="bulk_import",
                     actor_name="Bulk import",

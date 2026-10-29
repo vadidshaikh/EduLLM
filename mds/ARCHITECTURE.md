@@ -1,16 +1,42 @@
 # Architecture
 
-Role-based RAG over institute documents. Stack: FastAPI, LangGraph, PostgreSQL + pgvector, React 19 + Vite, NVIDIA API Catalog (LLM), LangSmith (tracing), Docker Compose.
+RAG over institute documents, with access scoped by workspaces and classrooms. Stack: FastAPI, LangGraph, PostgreSQL + pgvector, React 19 + Vite, NVIDIA API Catalog (LLM), LangSmith (tracing), Docker Compose.
 
 ## Core rule: access control
 
 **Restricted content is never retrieved, so it never reaches the LLM.** It is not enforced through prompts.
 
-- Each document has `allowed_roles`: `["student","faculty"]` or `["faculty"]`. It is copied onto every chunk.
+- Each document has `scope_ids` (UUID[]), copied onto every chunk. A scope id is one of:
+  - `INSTITUTE` (`…0001`): everyone. `ALL_FACULTY` (`…0002`): every faculty member.
+  - a **workspace** id: that workspace's faculty members;
+  - a **classroom** id: that classroom's students (only while it isn't archived).
 - The only enforcement point is `backend/app/db/queries.py::search_chunks()`:
-  `WHERE chunks.allowed_roles @> ARRAY[role]`. A GIN index keeps it fast.
-- `role` always comes from the verified JWT (`app/auth/dependencies.py`), never from the request body.
-- Students see student-tagged docs. Faculty see everything. Admin routes are faculty only.
+  `WHERE chunks.scope_ids && <user's scope ids>`. A GIN index keeps it fast.
+- The user's scope ids come from `queries._user_scope_ids()`, read from the membership tables **on every request**
+  (not the JWT), so adding/removing someone or archiving a classroom applies immediately.
+  Workspace ids are only granted to the `faculty` role and classroom ids only to `student`.
+- `role` and email always come from the verified JWT (`app/auth/dependencies.py`), never from the request body.
+- `queries.list_readable_documents()` (`GET /documents`, the Ask page's shelf) uses the same scope check as
+  `search_chunks` (`_readable_scopes`), so the shelf lists exactly the books the chat can answer from.
+- The chat can pass `scope_id` to search one workspace/classroom. It is intersected with the user's scope ids,
+  so it can only narrow access, never widen it. `scope_id = INSTITUTE` means the institute library: both
+  institute-wide scopes the user holds (`ALL_FACULTY` too, for faculty).
+
+### Where documents live
+
+| Place | `workspace_id` | `visibility` | `scope_ids` | Managed by |
+|---|---|---|---|---|
+| Institute library | null | `institute` / `faculty` | `[INSTITUTE]` / `[ALL_FACULTY]` | any faculty |
+| Personal workspace | its id | `workspace` | `[workspace]` | its owner |
+| Shared workspace | its id | `workspace` | `[workspace]` | its owner and editors |
+| Shared workspace, published | its id | `classrooms` | `[workspace, classroom…]` | its owner and editors |
+
+- A faculty member's personal workspace is created on first login. Shared workspaces have an owner (adds/removes
+  faculty, renames, deletes when empty) and editors. Only shared workspaces have classrooms.
+- Students join a classroom with its 6-character join code, or faculty bulk-add them by email.
+- Changing a document's access rewrites `scope_ids` on its chunks (no re-embedding). `replace_chunks` copies the
+  document's *current* `scope_ids` under a row lock, so an access change during ingestion isn't lost.
+- `search_chunks` turns on pgvector's `ivfflat.iterative_scan` so narrow scopes still get `TOP_K` results.
 
 ## Login (magic link)
 
@@ -68,7 +94,8 @@ Returns newline-delimited JSON:
 Upload → save file → `documents` row (status `queued`) → background job: **parse** (Docling) → **split** (4000/800 chars) → **embed** (`multi-qa-mpnet-base-dot-v1`, 768-dim) → replace chunks → status `indexed` or `failed`.
 
 - `documents.progress` (0–100) drives the admin progress bar: 5 at start, 15 after parse, 20 after split, 20→90 during embedding, 100 when indexed.
-- Uploading a title that already exists updates the row in place, bumps `version` and replaces its chunks. Version isn't shown in the UI.
+- Uploading a title that already exists in the same workspace (or the institute library) updates that row in place,
+  bumps `version` and replaces its chunks. Version isn't shown in the UI.
 
 ## Tracing (LangSmith, optional)
 
@@ -85,9 +112,16 @@ Upload → save file → `documents` row (status `queued`) → background job: *
 | `GET /conversations`, `GET /conversations/{id}/messages` | Sidebar and history |
 | `PATCH /conversations/{id}`, `DELETE /conversations/{id}` | Rename/pin, delete |
 | `DELETE /conversations/{id}/messages/{message_id}` | Truncate for edit |
-| `POST/GET/PATCH/DELETE /admin/documents` | Document management (faculty); every write is audited |
-| `GET /admin/document-events`, `GET /admin/documents/{id}/events` | Audit log across all documents / for one document, kept after delete (faculty) |
-| `GET /notifications`, `POST /notifications/{id}/read`, `/notifications/read-all` | Update/delete notices for the user's role, excluding their own actions; mark read, never delete |
+| `POST/GET/PATCH/DELETE /admin/documents` | Document management (faculty); `?workspace_id=` selects a workspace, omitted = institute library. Every write is audited |
+| `GET /admin/document-events`, `GET /admin/documents/{id}/events` | Audit log for one workspace (or the library) / for one document, kept after delete |
+| `GET /notifications`, `POST /notifications/{id}/read`, `/notifications/read-all` | Update/delete notices for documents the user could see (by scope ids), excluding their own actions; mark read, never delete |
+| `GET/POST /workspaces`, `PATCH/DELETE /workspaces/{id}` | List (creates the personal one if missing), create shared, rename, delete when empty |
+| `GET/POST /workspaces/{id}/members`, `DELETE …/members/{email}` | Faculty of a shared workspace; owner adds (invite email if never signed in) and removes; editors can leave |
+| `GET/POST /workspaces/{id}/classrooms`, `PATCH /classrooms/{id}`, `POST /classrooms/{id}/join-code` | Classrooms: create, edit, archive/restore, new join code |
+| `GET/POST /classrooms/{id}/students`, `DELETE …/students/{email}` | Roster; POST takes pasted emails/CSV |
+| `GET /classrooms`, `POST /classrooms/join`, `DELETE /classrooms/{id}/membership` | Student: my classrooms, join by code, leave |
+| `GET /scopes` | What the chat can be narrowed to (workspaces or classrooms) |
+| `GET /documents?scope_id=` | Ready documents the caller can ask about (`id`, `title`), all or one workspace/classroom; any role |
 
 ## Code map
 
@@ -98,21 +132,43 @@ backend/app/
   auth/      email_rules.py, jwt.py, magic_link.py, mailer.py, dependencies.py
   ingestion/ parser.py, splitter.py, embedder.py, pipeline.py
   rag/       state.py, prompts.py, llm.py, chart_parser.py, nodes.py, graph.py, streaming.py
-  api/       schemas.py, query.py, conversations.py, auth.py, admin_documents.py, notifications.py
+  api/       schemas.py, query.py, conversations.py, auth.py, admin_documents.py, notifications.py,
+             workspaces.py (workspaces, members, classrooms, /scopes)
 backend/db/schema.sql          documents, chunks, conversations, messages, login_tokens,
-                               users, document_events, notifications, notification_reads
+                               users, document_events, notifications, notification_reads,
+                               workspaces, workspace_members, classrooms, classroom_members
 backend/scripts/               init_db.py, mint_dev_token.py, bulk_upload_docs.py
 frontend/src/
+  App.jsx    signed-out routes, and the app shell (topbar + Ask / Library views)
   api/client.js
-  auth/      useAuth.js, EmailLoginPage.jsx, VerifyPage.jsx
-  chat/      ChatPage, Sidebar, NotificationBell, AnswerBlock, ChartBlock, RoleBadge, SourceTag
-  admin/     AdminPage, DocumentsTable, ActivityDrawer, UploadForm
-  styles/    theme.css, fonts.css    (ThemeContext.jsx = light/dark toggle)
+  auth/      useAuth.js, EmailLoginPage (+ LoginLayout), VerifyPage
+  shell/     useShelves.js (workspaces/classrooms, what Ask searches, which library is open),
+             ScopeSwitcher (topbar switcher; join a classroom / new workspace), Notices (bell)
+  chat/      ChatPage (Ask: shelf, thread, desk, composer), History, AnswerBlock, ChartBlock
+  library/   LibraryPage (shelves/list, needs attention, recent changes, tabs), DocumentDrawer,
+             ClassroomsPanel, MembersPanel
+  ui/        Shelf.jsx (Spine, ShelfGroup, WsMark, SpineTooltip), spines.js, Icons.jsx, Logo.jsx
+  styles/    theme.css   (ThemeContext.jsx = light/dark toggle)
 ```
 
 ## UI design
 
-- Dark warm palette: background `#1A1918`, surface `#242322`, text `#EDEAE4`, muted `#9C9890`, accent `#C4703F` (used sparingly).
-- Fonts: Inter for UI, Source Serif 4 for answers, JetBrains Mono for citations and filenames.
-- A "Viewing as: Student/Faculty" badge always shows the current role.
-- The admin panel is a plain utility table.
+"The Shelf", from `edullm-ui-reference.html` (styles only; the data comes from the API).
+
+- Every document is a book spine. Its colour (one of six logo tones) and size are derived from its id and title
+  (`ui/spines.js`), since documents have no category or page count. Indexing spines fill up; failed ones are red;
+  a lock marks books students can't read (not published to a classroom / faculty only).
+- Topbar switcher: one choice that both views follow — the institute library, a workspace (faculty) or a
+  classroom (student); nothing picked means "All". Ask searches only the pick (`scope_id`); Library shows that
+  library. The Library tab always opens on an overview of every library (and clears the pick); faculty have no
+  separate "All" menu entry, students do ("All my classes"). Faculty create shared workspaces from it (name required; other faculty and a first classroom
+  optional); students join classrooms from it.
+- Ask: with "All" or the institute library selected, the empty state is a decorative shelf of untitled books (students also get their
+  classrooms as shortcuts). With one workspace or classroom selected it shows that shelf's real books (or the untitled shelf with a hint
+  when it's empty)
+  (`GET /documents` for students, the library listing for faculty). The desk on the right lists every doc the conversation used; hovering or clicking an answer highlights
+  the docs that answer used (default: the latest answer). On narrow screens the desk is a strip above the thread.
+- Library (faculty): shelves grouped by who can read them, each with an upload slot that sets that access;
+  list view; a drawer per book (rename, access/publish, history, remove); classrooms and faculty tabs for shared
+  workspaces.
+- Fonts: Outfit (UI), Literata (answers), JetBrains Mono (join codes). Light and dark themes.

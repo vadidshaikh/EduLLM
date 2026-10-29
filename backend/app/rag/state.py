@@ -2,7 +2,12 @@ from typing import Any, TypedDict
 
 
 class RAGState(TypedDict, total=False):
+    # Who is asking (from the verified JWT) and, optionally, the one
+    # workspace/classroom to search. retrieve_filtered passes these to
+    # search_chunks, which works out what the user may read.
+    user_email: str
     role: str
+    scope_id: str | None
     query: str
     conversation_id: str
     # Carries the current question in LangChain's role/content shape purely

@@ -34,7 +34,8 @@ const CATEGORICAL = {
   light: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"],
   dark: ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"],
 };
-const SURFACE = { light: "#fcfcfb", dark: "#1a1a19" };
+// The answer page background (--page in theme.css), for pie/doughnut slice borders.
+const SURFACE = { light: "#ffffff", dark: "#1f2527" };
 
 function withAlpha(hex, alpha) {
   const n = parseInt(hex.slice(1), 16);

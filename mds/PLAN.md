@@ -49,6 +49,8 @@ Today users exist only inside the JWT; there is no list of who can access what. 
 
 ## Phase 2 — Workspaces and classrooms
 
+**Status:** implemented (2026-10-29).
+
 **Goal:** faculty create workspaces (personal or shared with other faculty by email). A workspace has classrooms; students join a classroom and see the notes published to it.
 
 ### Model
@@ -80,7 +82,14 @@ documents: + workspace_id, + visibility: workspace|classrooms, + classroom_ids U
 ### Decisions
 - [x] Any faculty member of a shared workspace (owner or editor) can update/delete any document in it. The audit log and notifications make this traceable.
 - [ ] Does the existing separate `admin` role question (below) go away? Workspace owner may cover it.
-- [ ] Can students be in classrooms from different workspaces at once? (Proposed: yes.)
+  For now any faculty member can still manage the institute library.
+- [x] Students can be in classrooms from different workspaces at once.
+- [x] Only shared workspaces have classrooms (personal = only the owner), as in the UI reference.
+- [x] Institute library kept: documents with no workspace, visibility `institute` (everyone) or `faculty`.
+  Phase 1 docs migrated there (`["student","faculty"]` → `institute`, `["faculty"]` → `faculty`).
+- [x] Picking a classroom/workspace in the chat searches only that scope (institute docs only appear under "All").
+- [x] Archiving a classroom removes its students' access; it can be restored. Workspaces can only be deleted when empty.
+- [ ] Moving a document between workspaces isn't supported yet (re-upload it instead).
 
 ---
 

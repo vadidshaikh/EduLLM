@@ -1,5 +1,6 @@
 import logging
 import re
+from uuid import UUID
 
 from langgraph.config import get_stream_writer
 
@@ -66,10 +67,20 @@ def condense_query_node(state: RAGState) -> dict:
 
 
 def retrieve_filtered_node(state: RAGState) -> dict:
-    """Looks up the document chunks most relevant to the user's question, only returning ones the user's role is allowed to see."""
+    """Looks up the document chunks most relevant to the user's question,
+    only returning ones the user is allowed to read (optionally narrowed to
+    the workspace or classroom they picked).
+    """
     search_query = state.get("condensed_query") or state["query"]
     query_embedding = embed_texts([search_query])[0]
-    chunks = search_chunks(role=state["role"], embedding=query_embedding, top_k=settings.TOP_K)
+    scope_id = state.get("scope_id")
+    chunks = search_chunks(
+        email=state["user_email"],
+        role=state["role"],
+        embedding=query_embedding,
+        top_k=settings.TOP_K,
+        scope_id=UUID(scope_id) if scope_id else None,
+    )
     return {"retrieved_chunks": chunks}
 
 
