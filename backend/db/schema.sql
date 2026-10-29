@@ -75,3 +75,85 @@ CREATE TABLE IF NOT EXISTS login_tokens (
     expires_at TIMESTAMPTZ NOT NULL,
     used BOOLEAN DEFAULT FALSE
 );
+
+-- Phase 1 (mds/PLAN.md): users table, document audit log, update/delete
+-- notifications.
+
+-- Upserted on every POST /auth/verify. `name` is derived from the email local
+-- part on first login and is not overwritten afterwards (editable later).
+CREATE TABLE IF NOT EXISTS users (
+    email TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    role TEXT NOT NULL,
+    dept TEXT,
+    year TEXT,
+    division TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_login_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE documents
+    ADD COLUMN IF NOT EXISTS updated_by TEXT;
+
+-- Append-only. No FK on document_id: the event must outlive the document,
+-- which is also why document_title is copied in.
+CREATE TABLE IF NOT EXISTS document_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    document_id UUID NOT NULL,
+    document_title TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('uploaded', 'updated', 'deleted')),
+    actor_email TEXT NOT NULL,
+    actor_name TEXT NOT NULL,
+    version INT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS document_events_document_id_created_at_idx
+    ON document_events (document_id, created_at DESC);
+
+-- One row per event, not per recipient. `audience` is the document's access
+-- scope at event time (Phase 1: role names; Phase 2: scope ids). Who sees a
+-- notification is decided by the query in queries.list_notifications.
+CREATE TABLE IF NOT EXISTS notifications (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    kind TEXT NOT NULL CHECK (kind IN ('updated', 'deleted')),
+    document_id UUID NOT NULL,
+    document_title TEXT NOT NULL,
+    version INT NOT NULL,
+    actor_email TEXT NOT NULL,
+    actor_name TEXT NOT NULL,
+    audience JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS notifications_created_at_idx
+    ON notifications (created_at DESC);
+
+CREATE INDEX IF NOT EXISTS notifications_audience_gin_idx
+    ON notifications USING GIN (audience);
+
+-- Users can mark notifications read but never delete them.
+CREATE TABLE IF NOT EXISTS notification_reads (
+    notification_id UUID NOT NULL REFERENCES notifications(id),
+    user_email TEXT NOT NULL,
+    read_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (notification_id, user_email)
+);
+
+-- The API has no UPDATE/DELETE path for the audit log or notifications;
+-- this makes the database refuse them too.
+CREATE OR REPLACE FUNCTION reject_modification() RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION '% is append-only', TG_TABLE_NAME;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS document_events_append_only ON document_events;
+CREATE TRIGGER document_events_append_only
+    BEFORE UPDATE OR DELETE ON document_events
+    FOR EACH ROW EXECUTE FUNCTION reject_modification();
+
+DROP TRIGGER IF EXISTS notifications_append_only ON notifications;
+CREATE TRIGGER notifications_append_only
+    BEFORE UPDATE OR DELETE ON notifications
+    FOR EACH ROW EXECUTE FUNCTION reject_modification();

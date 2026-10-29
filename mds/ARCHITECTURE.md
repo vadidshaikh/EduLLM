@@ -85,7 +85,9 @@ Upload → save file → `documents` row (status `queued`) → background job: *
 | `GET /conversations`, `GET /conversations/{id}/messages` | Sidebar and history |
 | `PATCH /conversations/{id}`, `DELETE /conversations/{id}` | Rename/pin, delete |
 | `DELETE /conversations/{id}/messages/{message_id}` | Truncate for edit |
-| `POST/GET/PATCH/DELETE /admin/documents` | Document management (faculty) |
+| `POST/GET/PATCH/DELETE /admin/documents` | Document management (faculty); every write is audited |
+| `GET /admin/document-events`, `GET /admin/documents/{id}/events` | Audit log across all documents / for one document, kept after delete (faculty) |
+| `GET /notifications`, `POST /notifications/{id}/read`, `/notifications/read-all` | Update/delete notices for the user's role, excluding their own actions; mark read, never delete |
 
 ## Code map
 
@@ -96,14 +98,15 @@ backend/app/
   auth/      email_rules.py, jwt.py, magic_link.py, mailer.py, dependencies.py
   ingestion/ parser.py, splitter.py, embedder.py, pipeline.py
   rag/       state.py, prompts.py, llm.py, chart_parser.py, nodes.py, graph.py, streaming.py
-  api/       schemas.py, query.py, conversations.py, auth.py, admin_documents.py
-backend/db/schema.sql          documents, chunks, conversations, messages, login_tokens
+  api/       schemas.py, query.py, conversations.py, auth.py, admin_documents.py, notifications.py
+backend/db/schema.sql          documents, chunks, conversations, messages, login_tokens,
+                               users, document_events, notifications, notification_reads
 backend/scripts/               init_db.py, mint_dev_token.py, bulk_upload_docs.py
 frontend/src/
   api/client.js
   auth/      useAuth.js, EmailLoginPage.jsx, VerifyPage.jsx
-  chat/      ChatPage, Sidebar, AnswerBlock, ChartBlock, RoleBadge, SourceTag
-  admin/     AdminPage, DocumentsTable, UploadForm
+  chat/      ChatPage, Sidebar, NotificationBell, AnswerBlock, ChartBlock, RoleBadge, SourceTag
+  admin/     AdminPage, DocumentsTable, ActivityDrawer, UploadForm
   styles/    theme.css, fonts.css    (ThemeContext.jsx = light/dark toggle)
 ```
 

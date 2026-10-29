@@ -20,6 +20,56 @@ from psycopg.types.json import Json
 from app.db.pool import pool
 
 
+def _record_event(
+    conn: Any,
+    document: dict[str, Any],
+    action: str,
+    actor_email: str,
+    actor_name: str,
+) -> None:
+    """Appends one row to the document audit log. Always called on the
+    caller's connection, before its commit, so the event and the change it
+    describes land in the same transaction.
+    """
+    conn.execute(
+        """
+        INSERT INTO document_events
+            (document_id, document_title, action, actor_email, actor_name, version)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """,
+        (document["id"], document["title"], action, actor_email, actor_name, document["version"]),
+    )
+
+
+def _record_notification(
+    conn: Any,
+    document: dict[str, Any],
+    kind: str,
+    actor_email: str,
+    actor_name: str,
+    audience: list[str],
+) -> None:
+    """Creates one update/delete notice for everyone in `audience` (role
+    names in Phase 1). Same transaction rule as `_record_event`.
+    """
+    conn.execute(
+        """
+        INSERT INTO notifications
+            (kind, document_id, document_title, version, actor_email, actor_name, audience)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            kind,
+            document["id"],
+            document["title"],
+            document["version"],
+            actor_email,
+            actor_name,
+            Json(sorted(set(audience))),
+        ),
+    )
+
+
 def insert_document(
     *,
     title: str,
@@ -27,15 +77,19 @@ def insert_document(
     storage_path: str,
     allowed_roles: list[str],
     file_hash: str,
-    uploaded_by: str,
+    actor_email: str,
+    actor_name: str,
 ) -> dict[str, Any]:
     """Insert a new document, or if `title` already exists, bump its version
     and replace its file metadata (re-upload case). Chunks are handled
     separately by `replace_chunks` once ingestion finishes.
+
+    A new document is logged as `uploaded`. A re-upload is logged as
+    `updated` and notifies everyone who could see the old or the new version.
     """
     with pool.connection() as conn:
         existing = conn.execute(
-            "SELECT id, version FROM documents WHERE title = %s", (title,)
+            "SELECT id, version, allowed_roles FROM documents WHERE title = %s FOR UPDATE", (title,)
         ).fetchone()
 
         if existing:
@@ -44,7 +98,7 @@ def insert_document(
                 UPDATE documents
                 SET filename = %s, storage_path = %s, allowed_roles = %s,
                     file_hash = %s, status = 'queued', progress = 0, version = %s,
-                    uploaded_by = %s, updated_at = now()
+                    updated_by = %s, updated_at = now()
                 WHERE id = %s
                 RETURNING *
                 """,
@@ -54,10 +108,14 @@ def insert_document(
                     allowed_roles,
                     file_hash,
                     existing["version"] + 1,
-                    uploaded_by,
+                    actor_email,
                     existing["id"],
                 ),
             ).fetchone()
+            _record_event(conn, row, "updated", actor_email, actor_name)
+            _record_notification(
+                conn, row, "updated", actor_email, actor_name, existing["allowed_roles"] + allowed_roles
+            )
         else:
             row = conn.execute(
                 """
@@ -66,17 +124,31 @@ def insert_document(
                 VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
-                (title, filename, storage_path, allowed_roles, file_hash, uploaded_by),
+                (title, filename, storage_path, allowed_roles, file_hash, actor_email),
             ).fetchone()
+            _record_event(conn, row, "uploaded", actor_email, actor_name)
 
         conn.commit()
         return row
 
 
 def list_documents() -> list[dict[str, Any]]:
-    """Fetches every uploaded document, newest first."""
+    """Fetches every uploaded document, newest first, with the display names
+    of who uploaded and last updated it (falling back to the raw email for
+    actors with no users row, e.g. bulk imports).
+    """
     with pool.connection() as conn:
-        return conn.execute("SELECT * FROM documents ORDER BY uploaded_at DESC").fetchall()
+        return conn.execute(
+            """
+            SELECT d.*,
+                   COALESCE(up.name, d.uploaded_by) AS uploaded_by_name,
+                   COALESCE(ud.name, d.updated_by) AS updated_by_name
+            FROM documents d
+            LEFT JOIN users up ON up.email = d.uploaded_by
+            LEFT JOIN users ud ON ud.email = d.updated_by
+            ORDER BY d.uploaded_at DESC
+            """
+        ).fetchall()
 
 
 def get_document(document_id: UUID) -> dict[str, Any] | None:
@@ -85,52 +157,96 @@ def get_document(document_id: UUID) -> dict[str, Any] | None:
         return conn.execute("SELECT * FROM documents WHERE id = %s", (document_id,)).fetchone()
 
 
-def delete_document(document_id: UUID) -> None:
-    """Permanently removes a document record from the database."""
-    with pool.connection() as conn:
-        conn.execute("DELETE FROM documents WHERE id = %s", (document_id,))
-        conn.commit()
-
-
-def update_document_roles(document_id: UUID, allowed_roles: list[str]) -> dict[str, Any] | None:
-    """Changes which roles can access a document, propagating the new roles
-    onto its existing chunks too (they carry a denormalized copy for
-    `search_chunks`'s access-control check) so the change takes effect
-    immediately, without re-ingestion.
+def delete_document(document_id: UUID, *, actor_email: str, actor_name: str) -> dict[str, Any] | None:
+    """Permanently removes a document record (chunks cascade), logs the
+    delete and notifies everyone who could see it. Returns the deleted row,
+    or None if it didn't exist.
     """
     with pool.connection() as conn:
+        row = conn.execute("DELETE FROM documents WHERE id = %s RETURNING *", (document_id,)).fetchone()
+        if row is not None:
+            _record_event(conn, row, "deleted", actor_email, actor_name)
+            _record_notification(conn, row, "deleted", actor_email, actor_name, row["allowed_roles"])
+        conn.commit()
+        return row
+
+
+def update_document(
+    document_id: UUID,
+    *,
+    title: str | None,
+    allowed_roles: list[str] | None,
+    actor_email: str,
+    actor_name: str,
+) -> dict[str, Any] | None:
+    """Renames a document and/or changes which roles can access it, as one
+    audited `updated` event. A roles change is propagated onto the existing
+    chunks too (they carry a denormalized copy for `search_chunks`'s
+    access-control check), so it takes effect immediately without
+    re-ingestion. Everyone who could see the document before or after the
+    change is notified.
+    """
+    with pool.connection() as conn:
+        before = conn.execute(
+            "SELECT allowed_roles FROM documents WHERE id = %s FOR UPDATE", (document_id,)
+        ).fetchone()
+        if before is None:
+            return None
+
         row = conn.execute(
             """
             UPDATE documents
-            SET allowed_roles = %s, updated_at = now()
+            SET title = COALESCE(%s, title),
+                allowed_roles = COALESCE(%s, allowed_roles),
+                updated_by = %s, updated_at = now()
             WHERE id = %s
             RETURNING *
             """,
-            (allowed_roles, document_id),
+            (title, allowed_roles, actor_email, document_id),
         ).fetchone()
-        if row is not None:
+        if allowed_roles is not None:
             conn.execute(
                 "UPDATE chunks SET allowed_roles = %s WHERE document_id = %s",
                 (allowed_roles, document_id),
             )
+        _record_event(conn, row, "updated", actor_email, actor_name)
+        _record_notification(
+            conn, row, "updated", actor_email, actor_name, before["allowed_roles"] + row["allowed_roles"]
+        )
         conn.commit()
         return row
 
 
-def update_document_title(document_id: UUID, title: str) -> dict[str, Any] | None:
-    """Renames a document."""
+def list_all_document_events(limit: int) -> list[dict[str, Any]]:
+    """The most recent audit events across all documents, newest first,
+    including documents that have since been deleted.
+    """
     with pool.connection() as conn:
-        row = conn.execute(
+        return conn.execute(
             """
-            UPDATE documents
-            SET title = %s, updated_at = now()
-            WHERE id = %s
-            RETURNING *
+            SELECT id, document_id, document_title, action, actor_email, actor_name, version, created_at
+            FROM document_events
+            ORDER BY created_at DESC
+            LIMIT %s
             """,
-            (title, document_id),
-        ).fetchone()
-        conn.commit()
-        return row
+            (limit,),
+        ).fetchall()
+
+
+def list_document_events(document_id: UUID) -> list[dict[str, Any]]:
+    """A document's audit history, newest first. Works for deleted
+    documents too, since events aren't tied to the documents row.
+    """
+    with pool.connection() as conn:
+        return conn.execute(
+            """
+            SELECT id, document_id, document_title, action, actor_email, actor_name, version, created_at
+            FROM document_events
+            WHERE document_id = %s
+            ORDER BY created_at DESC
+            """,
+            (document_id,),
+        ).fetchall()
 
 
 def update_document_status(document_id: UUID, status: str, progress: int | None = None) -> None:
@@ -419,4 +535,104 @@ def mark_login_token_used(token: str) -> None:
     """Flags a magic-link login token as already used, so it can't be replayed."""
     with pool.connection() as conn:
         conn.execute("UPDATE login_tokens SET used = TRUE WHERE token = %s", (token,))
+        conn.commit()
+
+
+# --- Users (Phase 1, mds/PLAN.md) ---
+
+
+def upsert_user(
+    *,
+    email: str,
+    name: str,
+    role: str,
+    dept: str | None,
+    year: str | None,
+    division: str | None,
+) -> None:
+    """Records a login. Role and email-derived fields are refreshed every
+    time; `name` is only set on first login so a later edit isn't clobbered.
+    """
+    with pool.connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO users (email, name, role, dept, year, division)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (email) DO UPDATE
+            SET role = EXCLUDED.role, dept = EXCLUDED.dept, year = EXCLUDED.year,
+                division = EXCLUDED.division, last_login_at = now()
+            """,
+            (email, name, role, dept, year, division),
+        )
+        conn.commit()
+
+
+def get_user(email: str) -> dict[str, Any] | None:
+    """Looks up a user by email."""
+    with pool.connection() as conn:
+        return conn.execute("SELECT * FROM users WHERE email = %s", (email,)).fetchone()
+
+
+# --- Notifications (Phase 1, mds/PLAN.md) ---
+#
+# Visibility is decided here and only here: a notification is shown to a
+# user when its audience includes their role and they weren't the actor.
+# There is deliberately no join-date filter, and no way to delete one.
+
+_VISIBLE_TO_USER = "n.audience ? %(role)s AND n.actor_email <> %(email)s"
+
+
+def list_notifications(email: str, role: str, limit: int) -> list[dict[str, Any]]:
+    """The user's most recent notifications, newest first, each with whether
+    they've read it.
+    """
+    with pool.connection() as conn:
+        return conn.execute(
+            f"""
+            SELECT n.id, n.kind, n.document_id, n.document_title, n.version,
+                   n.actor_name, n.created_at, r.read_at IS NOT NULL AS is_read
+            FROM notifications n
+            LEFT JOIN notification_reads r
+                   ON r.notification_id = n.id AND r.user_email = %(email)s
+            WHERE {_VISIBLE_TO_USER}
+            ORDER BY n.created_at DESC
+            LIMIT %(limit)s
+            """,
+            {"email": email, "role": role, "limit": limit},
+        ).fetchall()
+
+
+def count_unread_notifications(email: str, role: str) -> int:
+    """How many of the user's visible notifications they haven't read."""
+    with pool.connection() as conn:
+        row = conn.execute(
+            f"""
+            SELECT count(*) AS unread
+            FROM notifications n
+            WHERE {_VISIBLE_TO_USER}
+              AND NOT EXISTS (
+                  SELECT 1 FROM notification_reads r
+                  WHERE r.notification_id = n.id AND r.user_email = %(email)s
+              )
+            """,
+            {"email": email, "role": role},
+        ).fetchone()
+        return row["unread"]
+
+
+def mark_notifications_read(email: str, role: str, notification_id: UUID | None = None) -> None:
+    """Marks one notification (or, with no id, all of them) read for the
+    user. Only notifications visible to the user can be marked.
+    """
+    with pool.connection() as conn:
+        conn.execute(
+            f"""
+            INSERT INTO notification_reads (notification_id, user_email)
+            SELECT n.id, %(email)s FROM notifications n
+            WHERE {_VISIBLE_TO_USER}
+              AND (%(id)s::uuid IS NULL OR n.id = %(id)s::uuid)
+            ON CONFLICT DO NOTHING
+            """,
+            {"email": email, "role": role, "id": notification_id},
+        )
         conn.commit()

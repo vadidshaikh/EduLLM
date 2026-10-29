@@ -1,8 +1,10 @@
 """Bulk upload all PDFs from the docs/ folder into the database.
 
-This script finds every .pdf in the project root's docs/ folder, registers it
-in the database, and queues it for ingestion. Use this to pre-populate the RAG
-system with documents on first setup.
+This script finds every .pdf in the project root's docs/ folder, copies it
+into storage (same as an upload through the API, so deleting the document
+later never touches the original in docs/), registers it in the database, and
+runs ingestion. Use this to pre-populate the RAG system with documents on
+first setup.
 
 Usage:
     python scripts/bulk_upload_docs.py [--roles student,faculty] [--dry-run]
@@ -29,7 +31,7 @@ from app.config import settings
 from app.db.pool import pool
 from app.db.queries import insert_document
 from app.ingestion.pipeline import run_ingestion
-from app.storage import compute_file_hash
+from app.storage import compute_file_hash, save_upload_file
 
 
 def main() -> None:
@@ -72,14 +74,16 @@ def main() -> None:
             try:
                 file_bytes = pdf.read_bytes()
                 file_hash = compute_file_hash(file_bytes)
+                storage_path = save_upload_file(file_bytes, pdf.name)
 
                 doc = insert_document(
                     title=pdf.stem,  # filename without extension as title
                     filename=pdf.name,
-                    storage_path=str(pdf),
+                    storage_path=str(storage_path),
                     allowed_roles=roles,
                     file_hash=file_hash,
-                    uploaded_by="bulk_import",
+                    actor_email="bulk_import",
+                    actor_name="Bulk import",
                 )
 
                 # Queue ingestion (runs in background in real deployment)

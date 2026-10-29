@@ -189,4 +189,39 @@ export function renameDocument(token, documentId, title) {
   });
 }
 
+/**
+ * Fetches recent audit events across all documents (deleted ones included), newest first.
+ */
+export function listAllDocumentEvents(token) {
+  return request("/admin/document-events", { token });
+}
+
+/**
+ * Fetches a document's audit history (uploads, updates, deletes), newest first.
+ */
+export function listDocumentEvents(token, documentId) {
+  return request(`/admin/documents/${documentId}/events`, { token });
+}
+
+/**
+ * Fetches the user's recent document update/delete notices and their unread count.
+ */
+export function listNotifications(token) {
+  return request("/notifications", { token });
+}
+
+/**
+ * Marks one notice as read.
+ */
+export function markNotificationRead(token, notificationId) {
+  return request(`/notifications/${notificationId}/read`, { method: "POST", token });
+}
+
+/**
+ * Marks every notice visible to the user as read.
+ */
+export function markAllNotificationsRead(token) {
+  return request("/notifications/read-all", { method: "POST", token });
+}
+
 export { ApiError };

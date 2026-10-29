@@ -1,11 +1,12 @@
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.schemas import LoginRequest, LoginResponse, TokenResponse, VerifyRequest
-from app.auth.email_rules import EmailFormatError, parse_institute_email
+from app.auth.email_rules import EmailFormatError, display_name_from_email, parse_institute_email
 from app.auth.jwt import AuthError, create_session_token
 from app.auth.magic_link import consume_login_token, generate_login_token
 from app.auth.mailer import send_magic_link
 from app.config import settings
+from app.db import queries
 
 router = APIRouter()
 
@@ -46,5 +47,13 @@ def verify_login(body: VerifyRequest) -> TokenResponse:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
 
     claims["sub"] = email
+    queries.upsert_user(
+        email=email,
+        name=display_name_from_email(email),
+        role=claims["role"],
+        dept=claims.get("dept"),
+        year=claims.get("year"),
+        division=claims.get("division"),
+    )
     access_token = create_session_token(claims, settings.SESSION_JWT_EXPIRY_DAYS)
     return TokenResponse(access_token=access_token)

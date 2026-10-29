@@ -33,6 +33,16 @@ def save_upload_file(file_bytes: bytes, original_filename: str) -> Path:
     return dest
 
 
+def delete_stored_file(path: str) -> None:
+    """Removes an uploaded file, but only if it lives inside the storage
+    folder — a documents row pointing anywhere else (e.g. an original under
+    docs/ from an old bulk import) is left alone rather than deleted.
+    """
+    target = Path(path).resolve()
+    if target.is_relative_to(storage_dir().resolve()):
+        target.unlink(missing_ok=True)
+
+
 def compute_file_hash(file_bytes: bytes) -> str:
     """Creates a unique fingerprint for a file's contents so duplicate uploads can be detected."""
     return hashlib.sha256(file_bytes).hexdigest()

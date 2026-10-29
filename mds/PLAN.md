@@ -14,6 +14,8 @@ The core rule from [ARCHITECTURE.md](ARCHITECTURE.md) still holds in every phase
 
 ## Phase 1 — Accountability: audit log + delete notifications
 
+**Status:** implemented (2026-10-29).
+
 **Goal:** every upload, update and delete records who did it. Updating or deleting a document notifies everyone who can see it (except the person who did it), and that notice can't be removed.
 
 ### Why a `users` table first

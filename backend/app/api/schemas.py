@@ -66,7 +66,12 @@ class DocumentOut(BaseModel):
     status: str
     progress: int
     version: int
+    uploaded_by: str
+    uploaded_by_name: str | None = None
     uploaded_at: datetime
+    updated_by: str | None
+    updated_by_name: str | None = None
+    updated_at: datetime
 
 
 class UploadResponse(BaseModel):
@@ -77,3 +82,30 @@ class UploadResponse(BaseModel):
 class UpdateDocumentRequest(BaseModel):
     title: str | None = None
     allowed_roles: list[str] | None = None
+
+
+class DocumentEventOut(BaseModel):
+    id: UUID
+    document_id: UUID
+    document_title: str
+    action: str
+    actor_email: str
+    actor_name: str
+    version: int
+    created_at: datetime
+
+
+class NotificationOut(BaseModel):
+    id: UUID
+    kind: str
+    document_id: UUID
+    document_title: str
+    version: int
+    actor_name: str
+    created_at: datetime
+    is_read: bool
+
+
+class NotificationsResponse(BaseModel):
+    unread_count: int
+    notifications: list[NotificationOut]
