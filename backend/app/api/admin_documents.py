@@ -24,7 +24,7 @@ router = APIRouter()
 _ACTIVITY_LIMIT = 200
 
 
-def _actor(claims: dict) -> dict[str, str]:
+def actor_fields(claims: dict) -> dict[str, str]:
     """Who is making this change, as recorded in the audit log: the session's
     email plus their stored display name (or a derived one if they have no
     users row yet, e.g. a session issued before the users table existed).
@@ -45,7 +45,7 @@ def _workspace_or_library(workspace_id: UUID | None, claims: dict) -> dict | Non
     return member_workspace(workspace_id, claims) if workspace_id is not None else None
 
 
-def _check_access(workspace: dict | None, visibility: str, classroom_ids: list[UUID]) -> list[UUID]:
+def check_access(workspace: dict | None, visibility: str, classroom_ids: list[UUID]) -> list[UUID]:
     """Validates who a document is being made readable by, for where it
     lives, and returns the de-duplicated classroom ids:
     - institute library: "institute" (everyone) or "faculty" (all faculty);
@@ -106,7 +106,7 @@ async def upload_document(
     replaces that document.
     """
     workspace = _workspace_or_library(workspace_id, claims)
-    classroom_ids = _check_access(workspace, visibility, classroom_ids)
+    classroom_ids = check_access(workspace, visibility, classroom_ids)
     title = title.strip()
     if not title:
         raise _unprocessable("title cannot be empty")
@@ -122,7 +122,7 @@ async def upload_document(
         visibility=visibility,
         classroom_ids=classroom_ids,
         file_hash=compute_file_hash(file_bytes),
-        **_actor(claims),
+        **actor_fields(claims),
     )
 
     background_tasks.add_task(
@@ -157,7 +157,7 @@ def update_document(
     classroom_ids = None
     if body.visibility is not None:
         workspace = _workspace_or_library(document["workspace_id"], claims)
-        classroom_ids = _check_access(workspace, body.visibility, body.classroom_ids)
+        classroom_ids = check_access(workspace, body.visibility, body.classroom_ids)
 
     title = None
     if body.title is not None:
@@ -170,7 +170,7 @@ def update_document(
         title=title,
         visibility=body.visibility,
         classroom_ids=classroom_ids,
-        **_actor(claims),
+        **actor_fields(claims),
     )
     if document is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
@@ -216,7 +216,7 @@ def delete_document(document_id: UUID, claims: dict = Depends(require_faculty)) 
     who could see the document is notified.
     """
     _writable_document(document_id, claims)
-    document = queries.delete_document(document_id, **_actor(claims))  # cascades to chunks
+    document = queries.delete_document(document_id, **actor_fields(claims))  # cascades to chunks
     if document is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
 

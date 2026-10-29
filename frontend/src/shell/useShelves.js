@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { listMyClassrooms, listWorkspaces } from "../api/client";
 import { hashString } from "../ui/spines";
+import { smoothly } from "../ui/transition";
 
 const SCOPE_KEY = "edullm_scope";
 
@@ -48,9 +49,9 @@ function workspaceOption(w) {
  * Loads what the user can switch between and remembers the one choice that
  * both views follow (`option`, set with `setScope`):
  * - "All" (nothing picked): Ask searches everything the user can read;
- *   Library shows an overview of their libraries. Faculty get here by
- *   clicking the Library tab or clearing Ask's scope chip; students also
- *   have it as a menu entry.
+ *   Library shows an overview of their libraries. Picked explicitly: the
+ *   menu's first entry, or clearing Ask's scope chip. Switching between Ask
+ *   and Library keeps the choice.
  * - The institute library, or one workspace (faculty) / classroom (student):
  *   Ask searches only it (`option.searchId`, sent as /query's scope_id);
  *   Library shows its docs.
@@ -82,7 +83,7 @@ export function useShelves(auth) {
   const setScope = useCallback((id) => {
     if (id) localStorage.setItem(SCOPE_KEY, id);
     else localStorage.removeItem(SCOPE_KEY);
-    setScopeState(id || null);
+    smoothly(() => setScopeState(id || null));
   }, []);
 
   const everything = {
@@ -104,9 +105,8 @@ export function useShelves(auth) {
 
   let sections;
   if (isFaculty) {
-    // No "All" entry for faculty: the Library tab's overview already lists
-    // every library, and nothing picked means "All" (the button says so).
     sections = [
+      { heading: null, options: [everything] },
       { heading: "Institute", options: [library] },
       { heading: "Personal", options: workspaces.filter((w) => w.kind === "personal").map(workspaceOption) },
       { heading: "Shared with you", options: workspaces.filter((w) => w.kind === "shared").map(workspaceOption) },

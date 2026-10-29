@@ -97,6 +97,29 @@ Upload → save file → `documents` row (status `queued`) → background job: *
 - Uploading a title that already exists in the same workspace (or the institute library) updates that row in place,
   bumps `version` and replaces its chunks. Version isn't shown in the UI.
 
+## Notes and slide decks (Phase 3)
+
+`app/api/notes.py`, `app/authoring/` (`prompts.py`, `generate.py`, `render.py`).
+
+- A note belongs to a workspace (`notes` table); any of its faculty can edit it. `kind` is `notes` (Markdown in `body_md`) or
+  `slides` (`slides`: `[{title, bullets, notes}]`).
+- **Sources** are some of the workspace's documents and the institute library's (indexed, up to 8), stored as
+  `sources = [{doc_id, title, version}]`; `[n]` in the text cites the n-th.
+- **Drafting** (`generate.py`) embeds the topic and takes the closest chunks *of each source*
+  (`queries.search_source_chunks`, ~12 chunks in total, at least 2 per source). That query applies the same
+  `scope_ids && <user's scope ids>` filter as `search_chunks`, so a draft can only use what its author can read.
+  Drafts are streamed from the LLM and collected (a blocking call over a minute hits the client's read timeout), with up to
+  8192 output tokens. If every key fails, the API returns 502 instead of saving the fallback sentence.
+- **Stale**: `queries._with_source_status` compares each source's stored version with the document's current one (or notes it
+  was removed). `POST /notes/{id}/redraft` returns a proposal only (whole note/deck, or one `## ` section sent by the editor);
+  the editor shows a line diff and nothing is saved until Save. `mark_up_to_date` records the current versions.
+- **Saving** is optimistic: `PATCH` carries the `updated_at` the editor loaded and gets 409 if someone saved since.
+- **Publishing** uploads the note through the normal path (`insert_document` + `run_ingestion`): notes as Markdown with a
+  Sources list appended, decks as `.pptx` (`render.deck_pptx`: title slide, slides with speaker notes, sources slide; built-in
+  design, or the template at `PPT_TEMPLATE_PATH`). `notes.document_id` links them; republishing replaces that document by id
+  (`insert_document(document_id=...)`), bumping its version and notifying its readers. A note can't be published under the
+  title of another document in the workspace (409), since uploads with an existing title replace it.
+
 ## Tracing (LangSmith, optional)
 
 `app/tracing.py`:
@@ -122,6 +145,11 @@ Upload → save file → `documents` row (status `queued`) → background job: *
 | `GET /classrooms`, `POST /classrooms/join`, `DELETE /classrooms/{id}/membership` | Student: my classrooms, join by code, leave |
 | `GET /scopes` | What the chat can be narrowed to (workspaces or classrooms) |
 | `GET /documents?scope_id=` | Ready documents the caller can ask about (`id`, `title`), all or one workspace/classroom; any role |
+| `GET /workspaces/{id}/note-sources` | Docs a note there can be written from (the workspace's + institute library, indexed) |
+| `GET/POST /workspaces/{id}/notes` | List notes/decks (with stale status); create one, LLM-drafted unless `generate: false` |
+| `GET/PATCH/DELETE /notes/{id}` | Open, save (409 if saved by someone else since; `mark_up_to_date`), delete |
+| `POST /notes/{id}/redraft` | New draft of the whole note/deck or one `## ` section, from the sources' current versions; saves nothing |
+| `POST /notes/{id}/publish`, `GET /notes/{id}/download` | Publish/republish as a workspace doc (`.md` / `.pptx`); download the file |
 
 ## Code map
 
@@ -133,21 +161,25 @@ backend/app/
   ingestion/ parser.py, splitter.py, embedder.py, pipeline.py
   rag/       state.py, prompts.py, llm.py, chart_parser.py, nodes.py, graph.py, streaming.py
   api/       schemas.py, query.py, conversations.py, auth.py, admin_documents.py, notifications.py,
-             workspaces.py (workspaces, members, classrooms, /scopes)
+             workspaces.py (workspaces, members, classrooms, /scopes), notes.py (notes and decks)
+  authoring/ prompts.py, generate.py (drafts from sources), render.py (Markdown / .pptx)
 backend/db/schema.sql          documents, chunks, conversations, messages, login_tokens,
                                users, document_events, notifications, notification_reads,
-                               workspaces, workspace_members, classrooms, classroom_members
+                               workspaces, workspace_members, classrooms, classroom_members, notes
 backend/scripts/               init_db.py, mint_dev_token.py, bulk_upload_docs.py
 frontend/src/
-  App.jsx    signed-out routes, and the app shell (topbar + Ask / Library views)
+  App.jsx    signed-out routes, and the app shell (topbar + Ask / Library views; both stay mounted,
+             the inactive one is hidden, so switching keeps state; ui/transition.js animates switches)
   api/client.js
   auth/      useAuth.js, EmailLoginPage (+ LoginLayout), VerifyPage
   shell/     useShelves.js (workspaces/classrooms, what Ask searches, which library is open),
-             ScopeSwitcher (topbar switcher; join a classroom / new workspace), Notices (bell)
+             ScopeSwitcher (shelf switcher; join a classroom / new workspace), Notices (bell)
   chat/      ChatPage (Ask: shelf, thread, desk, composer), History, AnswerBlock, ChartBlock
   library/   LibraryPage (shelves/list, needs attention, recent changes, tabs), DocumentDrawer,
-             ClassroomsPanel, MembersPanel
-  ui/        Shelf.jsx (Spine, ShelfGroup, WsMark, SpineTooltip), spines.js, Icons.jsx, Logo.jsx
+             ClassroomsPanel, MembersPanel, NotesPanel (Notes & slides tab), NewNoteDialog,
+             NoteEditor (editor, redraft + compare, publish), noteState.js
+  ui/        Shelf.jsx (Spine, ShelfGroup, WsMark, SpineTooltip), spines.js, Icons.jsx, Logo.jsx,
+             diff.js (line diff, note sections)
   styles/    theme.css   (ThemeContext.jsx = light/dark toggle)
 ```
 
@@ -158,10 +190,10 @@ frontend/src/
 - Every document is a book spine. Its colour (one of six logo tones) and size are derived from its id and title
   (`ui/spines.js`), since documents have no category or page count. Indexing spines fill up; failed ones are red;
   a lock marks books students can't read (not published to a classroom / faculty only).
-- Topbar switcher: one choice that both views follow — the institute library, a workspace (faculty) or a
+- Shelf switcher (top of the history sidebar on Ask, in the topbar on Library; Ask and Library are centred in the topbar): one choice that both views follow — the institute library, a workspace (faculty) or a
   classroom (student); nothing picked means "All". Ask searches only the pick (`scope_id`); Library shows that
-  library. The Library tab always opens on an overview of every library (and clears the pick); faculty have no
-  separate "All" menu entry, students do ("All my classes"). Faculty create shared workspaces from it (name required; other faculty and a first classroom
+  library. Switching between Ask and Library keeps the pick; "All" is chosen explicitly from the menu
+  ("All my shelves" for faculty, which the Library shows as an overview of every library; "All my classes" for students). Faculty create shared workspaces from it (name required; other faculty and a first classroom
   optional); students join classrooms from it.
 - Ask: with "All" or the institute library selected, the empty state is a decorative shelf of untitled books (students also get their
   classrooms as shortcuts). With one workspace or classroom selected it shows that shelf's real books (or the untitled shelf with a hint
@@ -169,6 +201,6 @@ frontend/src/
   (`GET /documents` for students, the library listing for faculty). The desk on the right lists every doc the conversation used; hovering or clicking an answer highlights
   the docs that answer used (default: the latest answer). On narrow screens the desk is a strip above the thread.
 - Library (faculty): shelves grouped by who can read them, each with an upload slot that sets that access;
-  list view; a drawer per book (rename, access/publish, history, remove); classrooms and faculty tabs for shared
-  workspaces.
+  list view; a drawer per book (rename, access/publish, history, remove); a "Notes & slides" tab for every
+  workspace; classrooms and faculty tabs for shared workspaces.
 - Fonts: Outfit (UI), Literata (answers), JetBrains Mono (join codes). Light and dark themes.

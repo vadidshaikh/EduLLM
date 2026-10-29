@@ -55,6 +55,27 @@ const PATHS = {
     </>
   ),
   dots: <path d="M5 12h.01M12 12h.01M19 12h.01" />,
+  download: <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />,
+  refresh: (
+    <>
+      <path d="M21 12a9 9 0 0 1-15.5 6.2L3 16" />
+      <path d="M3 12a9 9 0 0 1 15.5-6.2L21 8" />
+      <path d="M21 3v5h-5M3 21v-5h5" />
+    </>
+  ),
+  arrowLeft: <path d="M19 12H5M12 19l-7-7 7-7" />,
+  note: (
+    <>
+      <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+      <path d="M14 3v6h6M8 13h8M8 17h5" />
+    </>
+  ),
+  slides: (
+    <>
+      <rect x="3" y="4" width="18" height="12" rx="2" />
+      <path d="M12 16v4M8 20h8M7 8h6M7 11h10" />
+    </>
+  ),
 };
 
 export default function Icon({ name, className }) {

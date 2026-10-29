@@ -41,11 +41,13 @@ function Stack({ docIds = [] }) {
 }
 
 /**
- * The left column: "New question" and the user's past conversations,
+ * The left column: the shelf switcher (`switcher`, what Ask searches),
+ * "New question" and the user's past conversations,
  * grouped, each with a menu to rename, pin or delete it. On narrow screens
  * it slides in (`open`).
  */
 export default function History({
+  switcher,
   conversations,
   activeConversationId,
   open,
@@ -109,6 +111,7 @@ export default function History({
   return (
     <aside className={`history${open ? " is-open" : ""}`} aria-label="Your questions">
       <div className="history-top">
+        {switcher}
         <button className="btn" onClick={onNewChat}>
           <Icon name="plus" /> New question
         </button>

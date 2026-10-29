@@ -139,37 +139,48 @@ def insert_document(
     file_hash: str,
     actor_email: str,
     actor_name: str,
+    document_id: UUID | None = None,
 ) -> dict[str, Any]:
     """Insert a new document, or if `title` already exists in the same
     workspace (or the institute library), bump its version and replace its
     file metadata and access (re-upload case). Chunks are handled separately
     by `replace_chunks` once ingestion finishes.
 
+    With `document_id` (a published note being republished), that document
+    is the one replaced, whatever its title was; its title becomes `title`.
+    If it no longer exists, a new document is inserted.
+
     A new document is logged as `uploaded`. A re-upload is logged as
     `updated` and notifies everyone who could see the old or the new version.
     """
     scope_ids = document_scope_ids(workspace_id, visibility, classroom_ids)
     with pool.connection() as conn:
-        existing = conn.execute(
-            """
-            SELECT id, version, scope_ids FROM documents
-            WHERE title = %s AND workspace_id IS NOT DISTINCT FROM %s
-            FOR UPDATE
-            """,
-            (title, workspace_id),
-        ).fetchone()
+        if document_id is not None:
+            existing = conn.execute(
+                "SELECT id, version, scope_ids FROM documents WHERE id = %s FOR UPDATE", (document_id,)
+            ).fetchone()
+        else:
+            existing = conn.execute(
+                """
+                SELECT id, version, scope_ids FROM documents
+                WHERE title = %s AND workspace_id IS NOT DISTINCT FROM %s
+                FOR UPDATE
+                """,
+                (title, workspace_id),
+            ).fetchone()
 
         if existing:
             row = conn.execute(
                 """
                 UPDATE documents
-                SET filename = %s, storage_path = %s, visibility = %s, classroom_ids = %s,
+                SET title = %s, filename = %s, storage_path = %s, visibility = %s, classroom_ids = %s,
                     scope_ids = %s, file_hash = %s, status = 'queued', progress = 0, version = %s,
                     updated_by = %s, updated_at = now()
                 WHERE id = %s
                 RETURNING *
                 """,
                 (
+                    title,
                     filename,
                     storage_path,
                     visibility,
@@ -925,13 +936,15 @@ def rename_workspace(workspace_id: UUID, name: str) -> None:
 
 def delete_workspace(workspace_id: UUID) -> bool:
     """Deletes a workspace with its members and classrooms, but only if it
-    has no documents left. Returns whether it was deleted.
+    has no documents or notes left. Returns whether it was deleted.
     """
     with pool.connection() as conn:
         row = conn.execute(
             """
             DELETE FROM workspaces w
-            WHERE w.id = %s AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.workspace_id = w.id)
+            WHERE w.id = %s
+              AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.workspace_id = w.id)
+              AND NOT EXISTS (SELECT 1 FROM notes n WHERE n.workspace_id = w.id)
             RETURNING id
             """,
             (workspace_id,),
@@ -1172,3 +1185,234 @@ def list_student_classrooms(email: str) -> list[dict[str, Any]]:
             """,
             (email,),
         ).fetchall()
+
+
+# --- Notes and slide decks (Phase 3, mds/PLAN.md) ---
+#
+# Same rule as workspaces: callers check the user is a member of the note's
+# workspace first. A note's sources can only be its workspace's documents or
+# the institute library's (checked in app/api/notes.py), and generation reads
+# them through `search_source_chunks`, which applies the user's scope ids
+# like `search_chunks` does.
+
+_NOTE_COLUMNS = """
+    n.*,
+    COALESCE(uc.name, n.created_by) AS created_by_name,
+    COALESCE(uu.name, n.updated_by) AS updated_by_name,
+    d.status AS document_status, d.progress AS document_progress,
+    d.visibility AS document_visibility, d.classroom_ids AS document_classroom_ids
+"""
+
+_NOTE_JOINS = """
+    LEFT JOIN users uc ON uc.email = n.created_by
+    LEFT JOIN users uu ON uu.email = n.updated_by
+    LEFT JOIN documents d ON d.id = n.document_id
+"""
+
+
+def list_note_source_documents(workspace_id: UUID) -> list[dict[str, Any]]:
+    """The indexed documents a note in this workspace can be written from:
+    the workspace's own, then the institute library's, each by title.
+    """
+    with pool.connection() as conn:
+        return conn.execute(
+            """
+            SELECT id, title, version, workspace_id, visibility FROM documents
+            WHERE (workspace_id = %s OR workspace_id IS NULL) AND status = 'indexed'
+            ORDER BY workspace_id IS NULL, lower(title)
+            """,
+            (workspace_id,),
+        ).fetchall()
+
+
+def get_documents(document_ids: list[UUID]) -> list[dict[str, Any]]:
+    """The given documents that still exist (any order)."""
+    if not document_ids:
+        return []
+    with pool.connection() as conn:
+        return conn.execute(
+            "SELECT id, title, version, workspace_id, status FROM documents WHERE id = ANY(%s)",
+            (document_ids,),
+        ).fetchall()
+
+
+def search_source_chunks(
+    *,
+    email: str,
+    role: str,
+    embedding: list[float],
+    document_ids: list[UUID],
+    per_document: int,
+) -> list[dict[str, Any]]:
+    """The `per_document` chunks of each given document closest to
+    `embedding`, in document order then reading order, for writing notes
+    from those documents. The scope filter is the same as `search_chunks`':
+    a document the user can't read contributes nothing.
+    """
+    if not document_ids:
+        return []
+    with pool.connection() as conn:
+        scopes = _user_scope_ids(conn, email, role)
+        return conn.execute(
+            """
+            SELECT r.document_id, r.chunk_index, r.chunk_text
+            FROM (
+                SELECT c.document_id, c.chunk_index, c.chunk_text,
+                       row_number() OVER (PARTITION BY c.document_id ORDER BY c.embedding <=> %s) AS rank
+                FROM chunks c
+                WHERE c.document_id = ANY(%s) AND c.scope_ids && %s::uuid[]
+            ) r
+            WHERE r.rank <= %s
+            ORDER BY array_position(%s, r.document_id), r.chunk_index
+            """,
+            (Vector(embedding), document_ids, scopes, per_document, document_ids),
+        ).fetchall()
+
+
+def _with_source_status(conn: Any, notes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Adds `source_status` to each note: one entry per source with the
+    version used, the document's current version (None once deleted) and
+    whether it changed since. `stale` is true when any source changed.
+    """
+    ids = {s["doc_id"] for n in notes for s in n["sources"]}
+    current = {}
+    if ids:
+        rows = conn.execute(
+            "SELECT id, title, version FROM documents WHERE id = ANY(%s::uuid[])", (list(ids),)
+        ).fetchall()
+        current = {str(r["id"]): r for r in rows}
+    for note in notes:
+        status = []
+        for source in note["sources"]:
+            doc = current.get(source["doc_id"])
+            status.append(
+                {
+                    "doc_id": source["doc_id"],
+                    "title": doc["title"] if doc else source["title"],
+                    "used_version": source["version"],
+                    "current_version": doc["version"] if doc else None,
+                    "changed": doc is None or doc["version"] != source["version"],
+                }
+            )
+        note["source_status"] = status
+        note["stale"] = any(s["changed"] for s in status)
+    return notes
+
+
+def list_notes(workspace_id: UUID) -> list[dict[str, Any]]:
+    """A workspace's notes and decks, most recently edited first. The body
+    and slides are left out; `get_note` has them.
+    """
+    with pool.connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT {_NOTE_COLUMNS}, jsonb_array_length(n.slides) AS slide_count
+            FROM notes n {_NOTE_JOINS}
+            WHERE n.workspace_id = %s
+            ORDER BY n.updated_at DESC
+            """,
+            (workspace_id,),
+        ).fetchall()
+        for row in rows:
+            row.pop("body_md")
+            row.pop("slides")
+        return _with_source_status(conn, rows)
+
+
+def get_note(note_id: UUID) -> dict[str, Any] | None:
+    with pool.connection() as conn:
+        row = conn.execute(
+            f"SELECT {_NOTE_COLUMNS} FROM notes n {_NOTE_JOINS} WHERE n.id = %s", (note_id,)
+        ).fetchone()
+        return _with_source_status(conn, [row])[0] if row else None
+
+
+def insert_note(
+    *,
+    workspace_id: UUID,
+    kind: str,
+    title: str,
+    subject: str | None,
+    topic: str,
+    body_md: str,
+    slides: list[dict[str, Any]],
+    sources: list[dict[str, Any]],
+    actor_email: str,
+) -> UUID:
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            INSERT INTO notes
+                (workspace_id, kind, title, subject, topic, body_md, slides, sources, created_by, updated_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (
+                workspace_id,
+                kind,
+                title,
+                subject,
+                topic,
+                body_md,
+                Json(slides),
+                Json(sources),
+                actor_email,
+                actor_email,
+            ),
+        ).fetchone()
+        conn.commit()
+        return row["id"]
+
+
+_NOTE_EDITABLE = ("title", "subject", "topic", "body_md", "slides", "sources")
+
+
+def update_note(
+    note_id: UUID, changes: dict[str, Any], *, base_updated_at: datetime, actor_email: str
+) -> bool:
+    """Saves an edit, but only if nobody else saved the note since the
+    editor loaded it (`base_updated_at`), so one faculty member can't
+    silently overwrite another's changes. Returns whether it was saved.
+    """
+    fields = [f for f in _NOTE_EDITABLE if f in changes]
+    values = [Json(changes[f]) if f in ("slides", "sources") else changes[f] for f in fields]
+    assignments = "".join(f"{f} = %s, " for f in fields)
+    with pool.connection() as conn:
+        row = conn.execute(
+            f"""
+            UPDATE notes SET {assignments}updated_by = %s, updated_at = now()
+            WHERE id = %s AND updated_at = %s
+            RETURNING id
+            """,
+            (*values, actor_email, note_id, base_updated_at),
+        ).fetchone()
+        conn.commit()
+        return row is not None
+
+
+def set_note_published(note_id: UUID, document_id: UUID) -> None:
+    """Links a note to the document it was published as. Doesn't touch
+    updated_at: publishing isn't an edit.
+    """
+    with pool.connection() as conn:
+        conn.execute(
+            "UPDATE notes SET document_id = %s, published_at = now() WHERE id = %s",
+            (document_id, note_id),
+        )
+        conn.commit()
+
+
+def delete_note(note_id: UUID) -> None:
+    """Deletes the note. A document it was published as stays in the library."""
+    with pool.connection() as conn:
+        conn.execute("DELETE FROM notes WHERE id = %s", (note_id,))
+        conn.commit()
+
+
+def find_document_by_title(workspace_id: UUID, title: str) -> dict[str, Any] | None:
+    """The workspace's document with this exact title, if any (uploads with
+    an existing title replace that document)."""
+    with pool.connection() as conn:
+        return conn.execute(
+            "SELECT id, title FROM documents WHERE workspace_id = %s AND title = %s", (workspace_id, title)
+        ).fetchone()

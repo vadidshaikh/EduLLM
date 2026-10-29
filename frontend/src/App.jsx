@@ -13,6 +13,7 @@ import { useShelves } from "./shell/useShelves";
 import Icon from "./ui/Icons";
 import Logo from "./ui/Logo";
 import { SpineTooltip } from "./ui/Shelf";
+import { smoothly } from "./ui/transition";
 import { nameFromEmail } from "./ui/spines";
 
 /**
@@ -57,7 +58,27 @@ function AppShell({ auth }) {
   const navigate = useNavigate();
   const isFaculty = auth.role === "faculty";
   const view = isFaculty && location.pathname.startsWith("/library") ? "library" : "ask";
+  const [libraryMounted, setLibraryMounted] = useState(view === "library");
+  if (view === "library" && !libraryMounted) setLibraryMounted(true);
   const name = nameFromEmail(auth.sub);
+  // The one shelf choice both views follow: in the topbar on Library, at
+  // the top of the history sidebar on Ask.
+  const switcher = (
+    <ScopeSwitcher
+      auth={auth}
+      sections={shelves.sections}
+      selected={shelves.option}
+      onSelect={shelves.setScope}
+      onChanged={shelves.reload}
+      onNewWorkspace={() => setCreating(true)}
+    />
+  );
+  // Ask <-> Library as a view transition (sidebar slides, switcher moves)
+  function go(e, to) {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; // new tab etc.
+    e.preventDefault();
+    if (location.pathname !== to) smoothly(() => navigate(to));
+  }
   const roleLine = isFaculty
     ? "Faculty"
     : ["Student", auth.claims?.dept?.toUpperCase()].filter(Boolean).join(", ");
@@ -65,28 +86,24 @@ function AppShell({ auth }) {
   return (
     <div className="app">
       <header className="topbar">
-        {view === "ask" && (
-          <button className="icon-btn menu-btn" aria-label="Open history" onClick={() => setHistoryOpen(!historyOpen)}>
-            <Icon name="menu" />
-          </button>
-        )}
-        <Logo />
-        <ScopeSwitcher
-          auth={auth}
-          sections={shelves.sections}
-          selected={shelves.option}
-          onSelect={shelves.setScope}
-          onChanged={shelves.reload}
-          onNewWorkspace={() => setCreating(true)}
-        />
+        <div className="topbar-left">
+          {view === "ask" && (
+            <button className="icon-btn menu-btn" aria-label="Open history" onClick={() => setHistoryOpen(!historyOpen)}>
+              <Icon name="menu" />
+            </button>
+          )}
+          <Logo />
+          {/* On Ask the switcher sits in the history sidebar instead */}
+          {view === "library" && switcher}
+        </div>
         {/* students have one destination, so no tabs */}
         <nav className="nav" aria-label="Main" style={isFaculty ? undefined : { visibility: "hidden" }}>
-          <NavLink to="/" end>
+          <NavLink to="/" end onClick={(e) => go(e, "/")}>
             Ask
           </NavLink>
-          {/* Library always opens on the overview of every library */}
+          {/* Library opens on whatever the switcher has picked ("All my shelves" = the overview) */}
           {isFaculty && (
-            <NavLink to="/library" onClick={() => shelves.setScope(null)}>
+            <NavLink to="/library" onClick={(e) => go(e, "/library")}>
               Library
             </NavLink>
           )}
@@ -113,29 +130,33 @@ function AppShell({ auth }) {
         </div>
       </header>
 
-      <div className={`body${view === "library" ? " body-wide" : ""}`}>
+      {/* Both views stay mounted and the inactive one is only hidden, so
+          switching keeps their state (open conversation, history, library
+          tab, scroll) instead of reloading everything each time. */}
+      <div className="body">
+        <div className={`view view-ask${view === "ask" ? "" : " is-hidden"}`} inert={view !== "ask"}>
+          <ChatPage
+            auth={auth}
+            shelves={shelves}
+            switcher={switcher}
+            historyOpen={historyOpen}
+            onCloseHistory={() => setHistoryOpen(false)}
+          />
+        </div>
+        {/* mounted on first visit, then kept */}
+        {libraryMounted && (
+          <div className={`view view-library${view === "library" ? "" : " is-hidden"}`} inert={view !== "library"}>
+            <LibraryPage
+              auth={auth}
+              shelves={shelves}
+              active={view === "library"}
+              onNewWorkspace={() => setCreating(true)}
+            />
+          </div>
+        )}
         <Routes>
-          <Route
-            path="/"
-            element={
-              <ChatPage
-                auth={auth}
-                shelves={shelves}
-                historyOpen={historyOpen}
-                onCloseHistory={() => setHistoryOpen(false)}
-              />
-            }
-          />
-          <Route
-            path="/library"
-            element={
-              isFaculty ? (
-                <LibraryPage auth={auth} shelves={shelves} onNewWorkspace={() => setCreating(true)} />
-              ) : (
-                <Navigate to="/" replace />
-              )
-            }
-          />
+          <Route path="/" element={null} />
+          <Route path="/library" element={isFaculty ? null : <Navigate to="/" replace />} />
           <Route path="/admin" element={<Navigate to="/library" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

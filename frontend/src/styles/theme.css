@@ -282,13 +282,15 @@ button.spine.is-pulled:hover .book {
   display: flex; align-items: center; gap: 1.25rem;
   padding: .6rem 1.1rem; background: var(--surface); border-bottom: 1px solid var(--line);
 }
-.nav { display: flex; gap: .25rem; margin-left: .75rem; }
+/* left and right take equal space, so Ask / Library sit in the middle */
+.topbar-left { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 1.25rem; }
+.nav { display: flex; gap: .25rem; }
 .nav button, .nav a {
   border: none; background: none; text-decoration: none; padding: .45rem .8rem; border-radius: 9px; font-weight: 600; color: var(--muted);
 }
 .nav button:hover, .nav a:hover { color: var(--text); background: var(--bg); }
 .nav button[aria-current="page"], .nav a[aria-current="page"] { color: var(--text); background: var(--bg); box-shadow: inset 0 -2px 0 var(--accent); border-radius: 9px 9px 4px 4px; }
-.topbar-right { margin-left: auto; display: flex; align-items: center; gap: .35rem; }
+.topbar-right { flex: 1 1 0; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: .35rem; }
 .badge-dot {
   position: absolute; top: 4px; right: 4px; min-width: 17px; height: 17px; padding: 0 4px;
   border-radius: 9px; background: var(--tone-6); color: #2b1e04; font-size: 11px; font-weight: 700;
@@ -304,12 +306,21 @@ button.spine.is-pulled:hover .book {
 .me-meta small { font-size: 12px; color: var(--muted); }
 .menu-btn { display: none; }
 
-.body { min-height: 0; display: grid; grid-template-columns: 264px 1fr; }
+.body { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+/* Ask and Library sit in the same cell; the inactive one is only hidden
+   (not display: none), so its state, scroll and animations survive. */
+.view { grid-area: 1 / 1; min-height: 0; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); }
+.view-ask { grid-template-columns: 264px minmax(0, 1fr); }
+.view.is-hidden { visibility: hidden; pointer-events: none; }
 
 /* history */
 .history { border-right: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
-.history-top { padding: .9rem .9rem .5rem; }
+.history-top { padding: .9rem .9rem .5rem; display: flex; flex-direction: column; gap: .6rem; }
 .history-top .btn { width: 100%; }
+.history .scope-switch { width: 100%; max-width: none; }
+.history .scope-switch > span:nth-child(2) { flex: 1; }
+.history .scope-switch small { display: block; overflow: hidden; text-overflow: ellipsis; }
+.history .ws-pop { width: min(330px, calc(100vw - 1.5rem)); }
 .history-list { overflow-y: auto; padding: .25rem .6rem 1rem; flex: 1; }
 .history h3 { font-size: 12.5px; font-weight: 600; color: var(--muted); padding: .8rem .45rem .3rem; letter-spacing: 0; }
 .h-item {
@@ -622,14 +633,15 @@ table.docs tbody tr:hover { background: var(--accent-soft); }
   .login { grid-template-columns: 1fr; }
   .login-shelf-side { min-height: 360px; order: -1; }
   .login-shelf-side h2 { font-size: 2.4rem; }
-  .body { grid-template-columns: 1fr; }
+  .view-ask { grid-template-columns: minmax(0, 1fr); }
   .history { position: fixed; top: 0; bottom: 0; left: 0; width: 280px; z-index: 60; transform: translateX(-105%); transition: transform .25s; }
   .history.is-open { transform: none; box-shadow: var(--shadow); }
   .menu-btn { display: inline-grid; }
   .me-meta, .nav { display: none; }
   .scope-switch small { display: none; }
   .theme-btn, .me { display: none; }
-  .topbar { gap: .5rem; padding: .5rem .6rem; }
+  .topbar, .topbar-left { gap: .5rem; }
+  .topbar { padding: .5rem .6rem; }
   .topbar .logo { height: 24px; }
   .sg-tag { white-space: normal; max-width: 140px; }
   .scope-switch { max-width: 140px; }
@@ -650,7 +662,6 @@ table.docs tbody tr:hover { background: var(--accent-soft); }
 /* =====================================================================
    APP ADDITIONS — pieces the backend needs that the reference doesn't draw
    ===================================================================== */
-.body-wide { grid-template-columns: 1fr; }
 .logo { height: 30px; }
 
 .form-error { font-size: 13.5px; color: var(--danger); margin-top: .5rem; }
@@ -867,3 +878,182 @@ table.docs tbody tr.empty-row:hover { background: none; }
 .empty-books .spine:nth-child(4) { margin-left: 18px; }
 .empty-books .spine:nth-child(4) .book { transform: rotate(-14deg); }
 .table-wrap.is-over .empty-state { background: var(--accent-soft); }
+
+/* library tabs stay visible on narrow screens (the topbar's .nav hides) */
+.nav.lib-tabs { display: flex; }
+
+/* ---------- notes and slide decks (Phase 3) ---------- */
+.notes-hint { flex: 1; min-width: 260px; margin: 0; }
+.state.warn { color: var(--tone-6); }
+.state.muted { color: var(--muted); }
+.note-kind { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; flex-shrink: 0; background: var(--accent-soft); color: var(--accent-ink); }
+.note-kind.is-slides { background: color-mix(in srgb, var(--tone-6) 18%, transparent); color: var(--tone-6); }
+.note-kind svg { width: 15px; height: 15px; }
+.note-sub { display: block; color: var(--muted); font-weight: 400; font-size: 12.5px; }
+.btn svg { width: 16px; height: 16px; vertical-align: -3px; }
+
+.modal-wide { width: min(680px, 94vw); }
+.modal-xwide { width: min(920px, 96vw); }
+.source-pick { display: flex; flex-direction: column; gap: .7rem; max-height: 290px; overflow-y: auto; padding-right: .2rem; }
+.source-pick h4 { font-size: 12.5px; color: var(--muted); font-weight: 600; margin: 0 0 .35rem; }
+
+.note-editor { margin-top: 1.2rem; display: flex; flex-direction: column; gap: .9rem; }
+.note-bar { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; }
+.note-bar-meta { color: var(--muted); font-size: 13.5px; }
+.note-bar-actions { margin-left: auto; display: flex; gap: .5rem; }
+.note-back { padding-left: .6rem; }
+.link-btn { border: none; background: none; padding: 0; color: var(--accent-ink); font-weight: 600; text-decoration: underline; cursor: pointer; }
+
+.stale-banner {
+  display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap;
+  border: 1px solid color-mix(in srgb, var(--tone-6) 55%, transparent);
+  background: color-mix(in srgb, var(--tone-6) 12%, var(--surface));
+  border-radius: 14px; padding: .8rem 1rem; font-size: 14px;
+}
+.stale-banner > div:first-child { flex: 1; min-width: 260px; }
+.stale-banner ul { margin: .3rem 0 .35rem; padding-left: 1.1rem; }
+.stale-banner small { color: var(--muted); font-size: 13px; }
+.stale-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+
+.note-title-input {
+  width: 100%; border: none; background: none; outline: none; padding: .2rem 0;
+  font-size: clamp(1.5rem, 2.4vw, 2rem); font-weight: 800; letter-spacing: -0.03em; color: var(--text);
+  border-bottom: 1.5px solid transparent;
+}
+.note-title-input:focus { border-bottom-color: var(--accent); }
+.note-meta-row label { flex: 1; display: block; }
+
+.note-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .8rem; }
+.note-md { min-height: 520px; height: 62vh; resize: vertical; font-family: var(--font-mono); font-size: 13.5px; line-height: 1.6; }
+.note-preview {
+  height: 62vh; min-height: 520px; overflow-y: auto;
+  background: var(--page); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.2rem;
+}
+.note-sections { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.note-sections .field-label { margin: 0 .3rem 0 0; }
+.chip {
+  display: inline-flex; align-items: center; gap: .35rem; max-width: 280px;
+  border: 1px solid var(--line-2); background: var(--surface); color: var(--text);
+  border-radius: 999px; padding: .28rem .7rem; font-size: 13px; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chip:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+.chip:disabled { opacity: .5; cursor: not-allowed; }
+.chip svg { width: 13px; height: 13px; flex-shrink: 0; }
+
+.slide-list { display: flex; flex-direction: column; gap: .7rem; align-items: flex-start; }
+.slide-card {
+  width: 100%; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: .8rem;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: .8rem;
+}
+.slide-num { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent-ink); font-weight: 700; font-size: 13px; }
+.slide-fields { display: flex; flex-direction: column; gap: .45rem; }
+.slide-fields textarea { resize: vertical; }
+.slide-title { font-weight: 650; font-size: 15px; }
+.slide-notes { font-size: 13.5px; color: var(--muted); }
+.slide-tools { display: flex; flex-direction: column; gap: .2rem; }
+
+.note-lower { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
+.note-sources { margin: 0; padding-left: 1.3rem; display: flex; flex-direction: column; gap: .3rem; font-size: 14px; }
+.note-sources small { color: var(--muted); }
+.note-sources small.is-changed { color: var(--tone-6); font-weight: 600; }
+
+.diff {
+  margin: 0; max-height: 60vh; overflow: auto; background: var(--bg); border-radius: 10px; padding: .6rem 0;
+  font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+}
+.diff-line { padding: 0 .8rem; display: grid; grid-template-columns: 1.2em minmax(0, 1fr); }
+.diff-line > span { color: var(--muted); user-select: none; }
+.diff-line.is-add { background: color-mix(in srgb, var(--ok) 16%, transparent); }
+.diff-line.is-del { background: var(--danger-soft); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--danger) 50%, transparent); }
+.diff-key { display: inline-block; padding: 0 .4rem; border-radius: 4px; font-size: 12px; margin-right: .2rem; }
+.diff-key.is-add { background: color-mix(in srgb, var(--ok) 16%, transparent); }
+.diff-key.is-del { background: var(--danger-soft); }
+
+@media (max-width: 860px) {
+  .note-split, .note-lower { grid-template-columns: 1fr; }
+  .note-md, .note-preview { height: 46vh; min-height: 300px; }
+  .note-bar-actions { margin-left: 0; }
+}
+
+/* =====================================================================
+   MOTION — things change smoothly instead of jumping into place.
+   (prefers-reduced-motion above switches all of this off.) Fades use fill
+   "backwards" so nothing keeps a transform afterwards, which would make
+   it the containing block for fixed dialogs inside it.
+   ===================================================================== */
+:root { --ease-out: cubic-bezier(.22, .8, .3, 1); }
+@keyframes fade-in { from { opacity: 0; transform: translateY(4px); } }
+@keyframes pop-in { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
+
+/* Ask, empty state: the line under the greeting is one or two lines
+   depending on the shelf picked; always reserve two (three on phones) so
+   the shelf below never moves. A shelf that's loading stays in place,
+   dimmed, until the new one fades in. */
+.ask-head p { min-height: 3em; }
+@media (max-width: 700px) { .ask-head p { min-height: 4.5em; } }
+.ask-shelf { transition: opacity .25s ease; }
+.ask-shelf.is-loading { opacity: .5; }
+
+/* views and messages ease in when they appear */
+/* (Ask/Library, shelf and tab switches fade via view transitions instead) */
+.convo { animation: fade-in .3s var(--ease-out) backwards; }
+.q-row, .q-editing, .a { animation: fade-in .3s var(--ease-out) backwards; }
+.desk-stats, .scope { animation: fade-in .25s var(--ease-out) backwards; }
+
+/* menus open with a short drop instead of appearing */
+.ws-pop, .pop, .h-menu { animation: pop-in .16s var(--ease-out) backwards; transform-origin: top left; }
+.pop { transform-origin: top right; }
+
+/* hover / selection colour changes */
+.btn, .icon-btn, .h-item, .ws-opt, .chip, .nav a, .nav button, .place-card, .scope-switch, .seg button,
+.publish label, .access label, table.docs tbody tr, .composer {
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease;
+}
+
+/* the desk's content sits in .desk-inner, so the narrow-screen strip can
+   grow open (0fr -> 1fr) instead of shoving the thread down in one frame */
+.desk-inner { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+@media (max-width: 1180px) {
+  .desk {
+    display: grid; grid-template-rows: 1fr;
+    transition: grid-template-rows .35s var(--ease-out), border-color .35s ease;
+  }
+  .desk.is-empty { display: grid; grid-template-rows: 0fr; border-bottom-color: transparent; }
+  .desk-inner { overflow: hidden; }
+  .desk-pile .flat, .desk-pile .flat:nth-child(odd), .desk-pile .flat:nth-child(3n) {
+    animation: fade-in .3s var(--ease-out) backwards;
+  }
+}
+
+/* ---------- view transitions (ui/transition.js) ----------
+   Ask <-> Library, shelf, tab and theme switches cross-fade the page as one
+   piece. The topbar stays put, the shelf switcher glides between the
+   history sidebar and the topbar, and the sidebar slides in and out. */
+.topbar { view-transition-name: topbar; }
+.scope-switch { view-transition-name: shelf-switch; }
+.history { view-transition-name: history; }
+::view-transition-group(*) { animation-duration: .32s; animation-timing-function: var(--ease-out); }
+/* the old page stays fully drawn underneath while the new one fades in
+   over it; fading both at once let the background flash through */
+::view-transition-old(root) { animation: none; }
+::view-transition-new(root) { animation: .26s ease both vt-fade-in-plain; }
+/* a hidden view's parts must not take part (names must be unique) */
+.view.is-hidden .history, .view.is-hidden .scope-switch { view-transition-name: none; }
+::view-transition-old(history):only-child { animation: .28s var(--ease-out) both vt-slide-out; }
+::view-transition-new(history):only-child { animation: .3s var(--ease-out) both vt-slide-in; }
+/* the switcher changes width between sidebar and topbar: drop the old
+   picture quickly so its text doesn't ghost over the new one */
+::view-transition-old(shelf-switch) { animation: .12s ease both vt-fade-out; }
+::view-transition-new(shelf-switch) { animation: .25s ease both vt-fade-in-plain; }
+@keyframes vt-fade-in-plain { from { opacity: 0; } }
+@keyframes vt-fade-out { to { opacity: 0; } }
+@keyframes vt-slide-out { to { opacity: 0; transform: translateX(-24px); } }
+@keyframes vt-slide-in { from { opacity: 0; transform: translateX(-24px); } }
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+}
+
+/* no visible scrollbars anywhere; areas still scroll with wheel, touch and keys */
+* { scrollbar-width: none; }
+*::-webkit-scrollbar { display: none; width: 0; height: 0; }

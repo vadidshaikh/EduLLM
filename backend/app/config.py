@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     LOGIN_TOKEN_EXPIRY_MINUTES: int = 15
     SESSION_JWT_EXPIRY_DAYS: int = 7
 
+    # Phase 3: an institute .pptx template for generated slide decks (its
+    # first layout is used for the title slide, its second for content).
+    # Empty uses the built-in design.
+    PPT_TEMPLATE_PATH: str = ""
+
     # Dev-only: comma-separated non-institute emails to log in as faculty,
     # bypassing the @scet.ac.in domain check. Leave empty outside local dev.
     DEV_FACULTY_EMAILS: str = ""

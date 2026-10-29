@@ -7,6 +7,13 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# What call_llm/stream_llm return for a free-text prompt when every key
+# failed. Notes generation compares against it to report an error instead
+# of saving it as a draft.
+MODEL_UNAVAILABLE_REPLY = (
+    "I’m unable to generate a model response right now because the hosted inference provider is unavailable."
+)
+
 
 def _to_chat_messages(messages: list[dict[str, str]]):
     """Convert OpenAI-style message dicts into LangChain message objects."""
@@ -37,15 +44,19 @@ def call_llm(
     *,
     model: str | None = None,
     temperature: float | None = None,
+    max_tokens: int | None = None,
 ) -> str:
     """Sends a conversation to the configured AI language model and returns its text reply.
 
     Each configured API key is tried in order; if all fail (or none are set),
-    the deterministic fallback reply is returned.
+    the deterministic fallback reply is returned. `max_tokens` raises the
+    reply length limit (ChatNVIDIA's default is 1024 tokens).
     """
     kwargs = {}
     if temperature is not None:
         kwargs["temperature"] = temperature
+    if max_tokens is not None:
+        kwargs["max_completion_tokens"] = max_tokens
     model_name = model or settings.LLM_MODEL
     for index, api_key in _api_keys():
         try:
@@ -62,16 +73,20 @@ def stream_llm(
     *,
     model: str | None = None,
     temperature: float | None = None,
+    max_tokens: int | None = None,
 ):
     """Sends a conversation to the configured AI language model and yields
     its text reply incrementally as chunks arrive, instead of waiting for
-    the full response like call_llm does.
+    the full response like call_llm does. Also the way to get long replies:
+    a blocking call that takes over a minute hits the client's read timeout.
 
     Each configured API key is tried in order until one starts streaming.
     """
     kwargs = {}
     if temperature is not None:
         kwargs["temperature"] = temperature
+    if max_tokens is not None:
+        kwargs["max_completion_tokens"] = max_tokens
     model_name = model or settings.LLM_MODEL
 
     yielded_any = False
@@ -117,4 +132,4 @@ def _fallback_reply(messages: list[dict[str, str]]) -> str:
     if "output only a single json object" in lower_prompt:
         return "{}"
 
-    return "I’m unable to generate a model response right now because the hosted inference provider is unavailable."
+    return MODEL_UNAVAILABLE_REPLY

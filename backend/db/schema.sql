@@ -308,3 +308,35 @@ CREATE INDEX IF NOT EXISTS documents_workspace_id_idx ON documents (workspace_id
 
 CREATE INDEX IF NOT EXISTS document_events_workspace_id_created_at_idx
     ON document_events (workspace_id, created_at DESC);
+
+-- Phase 3 (mds/PLAN.md): faculty notes and slide decks.
+--
+-- A note is written (or drafted by the LLM) from some of its workspace's
+-- documents and the institute library's. `sources` remembers which version
+-- of each source was used, as [{"doc_id", "title", "version"}] in citation
+-- order ([1] is the first). A note is stale when any of them has since been
+-- re-uploaded or deleted; it is never rewritten automatically.
+-- Publishing turns it into an ordinary document (`document_id`) that goes
+-- through ingestion, so it becomes searchable and gets audit events.
+CREATE TABLE IF NOT EXISTS notes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id),
+    kind TEXT NOT NULL CHECK (kind IN ('notes', 'slides')),
+    title TEXT NOT NULL,
+    subject TEXT,
+    topic TEXT NOT NULL,
+    body_md TEXT NOT NULL DEFAULT '',          -- kind = notes
+    slides JSONB NOT NULL DEFAULT '[]',        -- kind = slides: [{title, bullets[], notes}]
+    sources JSONB NOT NULL DEFAULT '[]',
+    document_id UUID REFERENCES documents(id) ON DELETE SET NULL,
+    published_at TIMESTAMPTZ,
+    created_by TEXT NOT NULL,
+    updated_by TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS notes_workspace_id_updated_at_idx ON notes (workspace_id, updated_at DESC);
+
+-- Notes generation reads the chunks of a few chosen documents.
+CREATE INDEX IF NOT EXISTS chunks_document_id_idx ON chunks (document_id);

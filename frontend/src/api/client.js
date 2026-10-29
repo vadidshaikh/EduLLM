@@ -352,4 +352,86 @@ export function leaveClassroom(token, classroomId) {
   return request(`/classrooms/${classroomId}/membership`, { method: "DELETE", token });
 }
 
+// --- Notes and slide decks (faculty, Phase 3) ---
+
+/**
+ * The ready documents a note in this workspace can be written from: the workspace's own and the
+ * institute library's ({id, title, version, workspace_id, visibility}; workspace_id null = library).
+ */
+export function listNoteSources(token, workspaceId) {
+  return request(`/workspaces/${workspaceId}/note-sources`, { token });
+}
+
+/**
+ * Fetches a workspace's notes and decks (no bodies), most recently edited first.
+ */
+export function listNotes(token, workspaceId) {
+  return request(`/workspaces/${workspaceId}/notes`, { token });
+}
+
+/**
+ * Creates notes or a deck (`kind`: "notes" | "slides") from source docs. With `generate` the
+ * model writes the first draft first, which can take a minute.
+ */
+export function createNote(token, workspaceId, { kind, title, topic, subject, sourceDocIds, instructions, generate = true }) {
+  return request(`/workspaces/${workspaceId}/notes`, {
+    method: "POST",
+    token,
+    body: { kind, title, topic, subject, source_doc_ids: sourceDocIds, instructions, generate },
+  });
+}
+
+export function getNote(token, noteId) {
+  return request(`/notes/${noteId}`, { token });
+}
+
+/**
+ * Saves edits ({title, subject, topic, body_md, slides, mark_up_to_date}). `baseUpdatedAt` is the
+ * note's updated_at when it was loaded; the save fails with 409 if someone else saved since.
+ */
+export function updateNote(token, noteId, baseUpdatedAt, changes) {
+  return request(`/notes/${noteId}`, { method: "PATCH", token, body: { base_updated_at: baseUpdatedAt, ...changes } });
+}
+
+export function deleteNote(token, noteId) {
+  return request(`/notes/${noteId}`, { method: "DELETE", token });
+}
+
+/**
+ * Asks for a new draft from the sources' current versions: one "## " section of notes (`section`,
+ * its current text), or the whole note/deck. Returns {body_md} or {slides}; nothing is saved.
+ */
+export function redraftNote(token, noteId, section = null) {
+  return request(`/notes/${noteId}/redraft`, { method: "POST", token, body: { section } });
+}
+
+/**
+ * Publishes the saved note as a workspace document ("workspace" = faculty only, or "classrooms").
+ */
+export function publishNote(token, noteId, { visibility, classroomIds = [] }) {
+  return request(`/notes/${noteId}/publish`, {
+    method: "POST",
+    token,
+    body: { visibility, classroom_ids: classroomIds },
+  });
+}
+
+/**
+ * Downloads the saved note as a file (.pptx for decks, .md for notes) through the browser.
+ */
+export async function downloadNote(token, noteId) {
+  const res = await fetch(`${BASE_URL}/notes/${noteId}/download`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, detail.detail || res.statusText);
+  }
+  const name = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "")?.[1] ?? "note";
+  const url = URL.createObjectURL(await res.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export { ApiError };

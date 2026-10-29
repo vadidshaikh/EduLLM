@@ -72,8 +72,15 @@ function useAskShelf(auth, shelves) {
     };
   }, [auth.token, isFaculty, scope.id, scope.kind, scope.name, scope.color]);
 
-  if (!SHOWS_REAL_DOCS.has(scope.kind)) return "blank";
-  return result.key === scope.id ? result.groups : null;
+  const current = !SHOWS_REAL_DOCS.has(scope.kind) ? "blank" : result.key === scope.id ? result.groups : null;
+  // While a new shelf loads, keep showing the last one (dimmed) instead of
+  // swapping in a one-line placeholder, so the page doesn't collapse and jump.
+  const [shown, setShown] = useState({ key: "blank", value: "blank" });
+  const key = SHOWS_REAL_DOCS.has(scope.kind) ? scope.id : "blank";
+  if (current !== null && (shown.key !== key || shown.value !== current)) {
+    setShown({ key, value: current }); // adjusting state while rendering, as React's docs describe
+  }
+  return current === null ? { ...shown, loading: true } : { key, value: current, loading: false };
 }
 
 /**
@@ -82,7 +89,7 @@ function useAskShelf(auth, shelves) {
  * and the composer. What gets searched is the topbar switcher's choice
  * (`shelves.option`), sent as the query's scope.
  */
-export default function ChatPage({ auth, shelves, historyOpen, onCloseHistory }) {
+export default function ChatPage({ auth, shelves, switcher, historyOpen, onCloseHistory }) {
   const [conversations, setConversations] = useState([]);
   const [conversationId, setConversationId] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -356,6 +363,7 @@ export default function ChatPage({ auth, shelves, historyOpen, onCloseHistory })
   return (
     <>
       <History
+        switcher={switcher}
         conversations={conversations}
         activeConversationId={conversationId}
         open={historyOpen}
@@ -440,8 +448,15 @@ export default function ChatPage({ auth, shelves, historyOpen, onCloseHistory })
             <section className="ask-empty">
               <div className="ask-inner">
                 <AskHead auth={auth} shelves={shelves} />
-                <div className="ask-shelf">
-                  {shelf === "blank" ? <BlankShelf /> : <BookShelf groups={shelf} isFaculty={auth.role === "faculty"} />}
+                <div className={`ask-shelf${shelf.loading ? " is-loading" : ""}`} aria-busy={shelf.loading}>
+                  {/* switching shelves cross-fades as a view transition (useShelves.setScope) */}
+                  <div key={shelf.key}>
+                    {shelf.value === "blank" ? (
+                      <BlankShelf />
+                    ) : (
+                      <BookShelf groups={shelf.value} isFaculty={auth.role === "faculty"} />
+                    )}
+                  </div>
                   {auth.role === "student" && !scope.id && <ClassroomCards shelves={shelves} />}
                 </div>
               </div>
@@ -463,7 +478,7 @@ function AskHead({ auth, shelves }) {
   let sub;
   if (auth.role === "faculty") {
     if (!scope.id) {
-      sub = "Answers come from the institute library and every workspace you're in. Pick one shelf from the switcher above to narrow it down.";
+      sub = "Answers come from the institute library and every workspace you're in. Pick one shelf from the switcher on the left to narrow it down.";
     } else if (scope.kind === "library") {
       sub = "Answers use only the institute library: institute-wide docs, including the faculty-only ones.";
     } else if (scope.kind === "personal") {
@@ -486,7 +501,10 @@ function AskHead({ auth, shelves }) {
   return (
     <div className="ask-head">
       <h1>What are you looking for, {first}?</h1>
-      <p>{sub}</p>
+      {/* min-height (theme.css) keeps 1- and 2-line text the same height */}
+      <p>
+        {sub}
+      </p>
     </div>
   );
 }
@@ -523,7 +541,6 @@ function BlankShelf() {
  * The ready books on the picked workspace or classroom, grouped.
  */
 function BookShelf({ groups, isFaculty }) {
-  if (groups === null) return <p className="desk-empty">Fetching the shelf...</p>;
   if (groups.length === 0) {
     // Same untitled shelf as "All", so an empty workspace doesn't look broken.
     return (
@@ -559,7 +576,7 @@ function ClassroomCards({ shelves }) {
   if (classes.length === 0) {
     return (
       <div className="note-box">
-        <b>You haven&apos;t joined a classroom yet.</b> Open the switcher at the top and enter the code your teacher
+        <b>You haven&apos;t joined a classroom yet.</b> Open the switcher above your questions and enter the code your teacher
         shared.
       </div>
     );
@@ -597,6 +614,7 @@ function Desk({ messages, focused }) {
 
   return (
     <aside className={`desk${docs.length ? "" : " is-empty"}`} aria-label="Docs used in this conversation">
+      <div className="desk-inner">
       <div className="desk-head">
         <h2>On your desk</h2>
         <p>Docs this conversation used. Hover or click an answer to see which ones it read.</p>
@@ -631,6 +649,7 @@ function Desk({ messages, focused }) {
       </div>
       <div className="plank desk-plank" />
       {docs.length === 0 && <p className="desk-empty">Docs land here as answers use them.</p>}
+      </div>
     </aside>
   );
 }

@@ -227,3 +227,107 @@ class ScopeOut(BaseModel):
     kind: str  # personal | shared | classroom
     name: str
     detail: str | None = None
+
+
+# --- Notes and slide decks (Phase 3) ---
+
+
+class NoteSourceDocumentOut(BaseModel):
+    """A document a note can be written from."""
+    id: UUID
+    title: str
+    version: int
+    workspace_id: UUID | None  # None = institute library
+    visibility: str
+
+
+class Slide(BaseModel):
+    title: str = ""
+    bullets: list[str] = []
+    notes: str = ""
+
+
+class NoteSource(BaseModel):
+    doc_id: str
+    title: str
+    version: int
+
+
+class SourceStatusOut(BaseModel):
+    doc_id: str
+    title: str
+    used_version: int
+    current_version: int | None  # None: the document was removed
+    changed: bool
+
+
+class NoteSummaryOut(BaseModel):
+    id: UUID
+    workspace_id: UUID
+    kind: Literal["notes", "slides"]
+    title: str
+    subject: str | None
+    topic: str
+    slide_count: int
+    source_status: list[SourceStatusOut]
+    stale: bool  # a source changed or was removed since it was written
+    document_id: UUID | None  # the document it was published as
+    document_status: str | None
+    document_progress: int | None
+    document_visibility: str | None
+    document_classroom_ids: list[UUID] | None
+    published_at: datetime | None
+    created_by: str
+    created_by_name: str
+    updated_by: str
+    updated_by_name: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class NoteOut(NoteSummaryOut):
+    body_md: str
+    slides: list[Slide]
+    sources: list[NoteSource]
+
+
+class CreateNoteRequest(BaseModel):
+    kind: Literal["notes", "slides"]
+    title: str
+    topic: str
+    subject: str | None = None
+    source_doc_ids: list[UUID]
+    instructions: str | None = None  # extra guidance for the draft
+    generate: bool = True  # False starts an empty note from the same sources
+
+
+class UpdateNoteRequest(BaseModel):
+    # The updated_at the editor loaded; the save is refused (409) if the
+    # note was saved by someone else since.
+    base_updated_at: datetime
+    title: str | None = None
+    subject: str | None = None
+    topic: str | None = None
+    body_md: str | None = None
+    slides: list[Slide] | None = None
+    # Record the sources' current versions: the faculty member has checked
+    # the note against them, so it's no longer stale. Removed sources are
+    # dropped.
+    mark_up_to_date: bool = False
+
+
+class RedraftRequest(BaseModel):
+    # One "## " section of the notes (from the editor, so unsaved edits
+    # count) to rewrite; omitted redrafts the whole note or deck.
+    section: str | None = None
+
+
+class RedraftResponse(BaseModel):
+    """A proposal only; nothing is saved until the editor saves it."""
+    body_md: str | None = None  # whole notes or the one section
+    slides: list[Slide] | None = None
+
+
+class PublishNoteRequest(BaseModel):
+    visibility: Literal["workspace", "classrooms"]
+    classroom_ids: list[UUID] = []

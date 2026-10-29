@@ -117,11 +117,12 @@ def rename_workspace(
 @router.delete("/workspaces/{workspace_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_workspace(workspace_id: UUID, claims: dict = Depends(require_faculty)) -> None:
     """Deletes an empty shared workspace, with its classrooms. Refuses while
-    it still has documents, so nothing is removed without an audit event.
+    it still has documents or notes, so nothing is removed without an audit
+    event.
     """
     _owned_shared_workspace(workspace_id, claims)
     if not queries.delete_workspace(workspace_id):
-        raise HTTPException(status.HTTP_409_CONFLICT, "delete the workspace's documents first")
+        raise HTTPException(status.HTTP_409_CONFLICT, "delete the workspace's documents and notes first")
 
 
 @router.get("/workspaces/{workspace_id}/members", response_model=list[WorkspaceMemberOut])

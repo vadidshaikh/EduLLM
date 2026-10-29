@@ -95,17 +95,34 @@ documents: + workspace_id, + visibility: workspace|classrooms, + classroom_ids U
 
 ## Phase 3 — Faculty notes / PPT authoring
 
+**Status:** implemented (2026-10-29).
+
 **Goal:** faculty create and update notes and slide decks from their workspace documents, and keep them current when sources change.
 
-- `notes (id, workspace_id, title, subject, topic, body_md, source_doc_ids UUID[], source_versions JSONB, created_by, updated_by, updated_at)`
-- **Generate**: faculty picks topic + source docs → RAG over *their* scope → LLM drafts Markdown notes with citations. Faculty edits in a Markdown editor, then saves.
-- **PPT**: generate a slide outline (JSON: slides → title, bullets, speaker notes) → render with `python-pptx` → download. Same source tracking.
-- **Publish**: saving/publishing a note runs it through the normal ingestion pipeline as a document, so it becomes searchable and gets audit events from Phase 1.
-- **"Stay up to date"**: `source_versions` stores the version of each source doc used. When a source's `version` bumps, mark the note **stale** and offer "regenerate section / show diff". No silent auto-rewrite.
+- `notes (id, workspace_id, kind: notes|slides, title, subject, topic, body_md, slides JSONB, sources JSONB, document_id, published_at, created_by, updated_by, created_at, updated_at)`
+  - `sources` = `[{doc_id, title, version}]` in citation order (`[1]` is the first). It replaces the planned
+    `source_doc_ids` + `source_versions` pair.
+- **Generate**: faculty picks topic + up to 8 source docs (the workspace's own and the institute library's) → for each source, the
+  chunks closest to the topic, through the user's scope ids → LLM drafts Markdown notes citing `[n]`. The draft is saved
+  straight away (generation takes ~20–60 s), then edited in a Markdown editor with preview.
+- **PPT**: LLM returns a slide outline (JSON: slides → title, bullets, speaker notes), edited as slide cards → rendered with
+  `python-pptx` (title slide + slides + sources slide) → download, or published as the `.pptx`.
+- **Publish**: the saved note is uploaded as a workspace document (`.md` / `.pptx`) through the normal ingestion pipeline, so it
+  becomes searchable, can go to classrooms, and gets audit events and notices. Republishing replaces that same document (new version).
+- **"Stay up to date"**: a note is **stale** when a source's `version` changed or the source was removed. The editor then offers
+  "redraft a section / the whole note (or deck)", shown as a line diff to accept or discard, and "mark up to date" (records the
+  current versions). No silent auto-rewrite.
 
 ### Decisions
-- [ ] Editor: plain Markdown textarea + preview, or a rich editor? (Proposed: Markdown first.)
-- [ ] PPT theme/template: one institute template?
+- [x] Editor: plain Markdown textarea + live preview for notes; slide cards (title, bullets, speaker notes) for decks.
+- [x] PPT theme: built-in 16:9 design in the logo's colours; `PPT_TEMPLATE_PATH` swaps in an institute `.pptx` template
+  (its first layout for the title slide, its second for content slides).
+- [x] Any faculty member of the workspace can edit a note (same rule as documents). Saves are refused (409) if someone else saved
+  since the editor loaded the note, instead of overwriting.
+- [x] Deleting a note keeps its published document; remove that from the library.
+- [ ] Sources can't be changed after a note is created (start a new note instead).
+- [ ] Decks can only be redrafted as a whole, not slide by slide.
+- [ ] No streaming of drafts into the editor yet (the request waits for the whole draft).
 
 ---
 

@@ -7,7 +7,8 @@ import { ThemeProvider } from './ThemeContext.jsx'
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <BrowserRouter>
+    {/* sync updates, so view transitions capture the new page (ui/transition.js) */}
+    <BrowserRouter useTransitions={false}>
       <ThemeProvider>
         <App />
       </ThemeProvider>

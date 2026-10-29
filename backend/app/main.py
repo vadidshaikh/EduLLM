@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.admin_documents import router as admin_documents_router
 from app.api.auth import router as auth_router
 from app.api.conversations import router as conversations_router
+from app.api.notes import router as notes_router
 from app.api.notifications import router as notifications_router
 from app.api.query import router as query_router
 from app.api.workspaces import router as workspaces_router
@@ -33,6 +34,8 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    # Lets the frontend read a download's file name (GET /notes/{id}/download).
+    expose_headers=["Content-Disposition"],
 )
 
 app.include_router(query_router)
@@ -40,6 +43,7 @@ app.include_router(admin_documents_router)
 app.include_router(auth_router)
 app.include_router(conversations_router)
 app.include_router(notifications_router)
+app.include_router(notes_router)
 app.include_router(workspaces_router)
 
 

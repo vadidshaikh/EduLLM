@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
+import { smoothly } from "./ui/transition";
 
 const ThemeContext = createContext(null);
 
@@ -16,9 +17,17 @@ export function ThemeProvider({ children }) {
   }, [theme]);
 
   /**
-   * Switches the theme between dark and light.
+   * Switches the theme between dark and light, cross-fading the page. The
+   * attribute is set right away (not only in the effect) so the transition
+   * captures the new colours.
    */
-  const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    smoothly(() => {
+      document.documentElement.setAttribute("data-theme", next);
+      setTheme(next);
+    });
+  };
 
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme }}>{children}</ThemeContext.Provider>

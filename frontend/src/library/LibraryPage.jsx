@@ -4,9 +4,11 @@ import Icon from "../ui/Icons";
 import { ShelfGroup, Spine, WsMark } from "../ui/Shelf";
 import { spineStatus, timeAgo } from "../ui/spines";
 import { LIBRARY } from "../shell/useShelves";
+import { smoothly } from "../ui/transition";
 import ClassroomsPanel from "./ClassroomsPanel";
 import DocumentDrawer from "./DocumentDrawer";
 import MembersPanel from "./MembersPanel";
+import NotesPanel from "./NotesPanel";
 
 const VIEW_KEY = "edullm_library_view";
 const RECENT_LIMIT = 8;
@@ -50,7 +52,7 @@ function accessText(doc, kind, classrooms) {
  * a list, what needs attention, recent changes, and for shared workspaces
  * its classrooms and faculty.
  */
-export default function LibraryPage({ auth, shelves, onNewWorkspace }) {
+export default function LibraryPage({ auth, shelves, active = true, onNewWorkspace }) {
   const option = shelves.option;
   if (!shelves.loaded) {
     return (
@@ -62,10 +64,10 @@ export default function LibraryPage({ auth, shelves, onNewWorkspace }) {
     );
   }
   if (option.kind === "all") {
-    return <Overview auth={auth} shelves={shelves} onNewWorkspace={onNewWorkspace} />;
+    return <Overview auth={auth} shelves={shelves} active={active} onNewWorkspace={onNewWorkspace} />;
   }
   // Remount per place so per-place state (tab, drawer, filter) starts fresh.
-  return <Library key={option.id} auth={auth} shelves={shelves} option={option} />;
+  return <Library key={option.id} auth={auth} shelves={shelves} option={option} active={active} />;
 }
 
 /**
@@ -73,12 +75,14 @@ export default function LibraryPage({ auth, shelves, onNewWorkspace }) {
  * personal, each shared workspace) with its doc count, plus a card to
  * create a shared workspace. Picking a card selects it in the switcher.
  */
-function Overview({ auth, shelves, onNewWorkspace }) {
+function Overview({ auth, shelves, active, onNewWorkspace }) {
   const places = shelves.sections.flatMap((s) => s.options).filter((o) => o.kind !== "all");
   const placesKey = places.map((o) => o.id).join(",");
   const [counts, setCounts] = useState({});
 
+  // Refetched (without blanking) each time the Library is shown again.
   useEffect(() => {
+    if (!active) return undefined;
     let cancelled = false;
     Promise.all(
       places.map((o) =>
@@ -92,7 +96,7 @@ function Overview({ auth, shelves, onNewWorkspace }) {
     };
     // placesKey stands in for `places` (a new array each render)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth.token, placesKey]);
+  }, [auth.token, placesKey, active]);
 
   return (
     <main className="main">
@@ -134,7 +138,7 @@ function Overview({ auth, shelves, onNewWorkspace }) {
   );
 }
 
-function Library({ auth, shelves, option }) {
+function Library({ auth, shelves, option, active }) {
   const workspace = option.workspace ?? null;
   const placeId = option.id === LIBRARY ? null : option.id;
   const kind = option.id === LIBRARY ? "library" : workspace.kind;
@@ -175,19 +179,22 @@ function Library({ auth, shelves, option }) {
     }
   }, [auth.token, placeId, kind]);
 
+  // On mount, and again (quietly, keeping what's shown) whenever the
+  // Library is switched back to, since it stays mounted while hidden.
   useEffect(() => {
+    if (!active) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount
     refresh();
     refreshClassrooms();
-  }, [refresh, refreshClassrooms]);
+  }, [refresh, refreshClassrooms, active]);
 
   // Poll while anything is still being indexed, so spines fill up on their own.
   useEffect(() => {
     const busy = documents?.some((d) => spineStatus(d) === "indexing");
-    if (!busy) return undefined;
+    if (!busy || !active) return undefined;
     const id = setInterval(refresh, 2000);
     return () => clearInterval(id);
-  }, [documents, refresh]);
+  }, [documents, refresh, active]);
 
   function chooseView(next) {
     localStorage.setItem(VIEW_KEY, next);
@@ -290,14 +297,19 @@ function Library({ auth, shelves, option }) {
             )}
           </div>
 
-          {kind === "shared" && (
+          {kind !== "library" && (
             <nav className="nav lib-tabs" aria-label="Workspace">
               {[
                 ["books", "Docs"],
-                ["classrooms", "Classrooms"],
-                ["faculty", "Faculty"],
+                ["notes", "Notes & slides"],
+                ...(kind === "shared"
+                  ? [
+                      ["classrooms", "Classrooms"],
+                      ["faculty", "Faculty"],
+                    ]
+                  : []),
               ].map(([id, label]) => (
-                <button key={id} aria-current={section === id ? "page" : undefined} onClick={() => setSection(id)}>
+                <button key={id} aria-current={section === id ? "page" : undefined} onClick={() => id !== section && smoothly(() => setSection(id))}>
                   {label}
                 </button>
               ))}
@@ -425,6 +437,10 @@ function Library({ auth, shelves, option }) {
                 }}
               />
             </>
+          )}
+
+          {section === "notes" && (
+            <NotesPanel token={auth.token} workspace={workspace} classrooms={classrooms} onDocsChanged={refresh} />
           )}
 
           {section === "classrooms" && (
