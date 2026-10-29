@@ -1,8 +1,20 @@
 # Edu LLM — Institute Document Q&A
 
-A role-based RAG system where students only see documents tagged for them, and faculty can see everything. Access control lives at the database level.
+RAG over institute documents, with access scoped by workspaces and classrooms: restricted content is filtered out at retrieval, so it never reaches the LLM.
 
-**Phase 2:** Conversation memory, multi-turn chat with sidebar history, auto-generated titles, and email-based magic-link login with role derivation from `@scet.ac.in` addresses.
+- **Ask:** multi-turn chat with history, sources and charts; search everything or one workspace / classroom.
+- **Library:** institute library and faculty workspaces, classrooms with join codes, audit log and update notices.
+- **Notes & slides:** LLM-drafted lecture notes and `.pptx` decks from chosen docs, kept up to date when sources change.
+- **Quizzes:** a reviewed question bank; assignments that never repeat across classrooms in a term, and quizzes where every student gets a different set.
+- Magic-link login; role derived from the `@scet.ac.in` address.
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Library](mds/screenshots/library.png) Library | ![Notes editor](mds/screenshots/notes-editor.png) Notes editor |
+| ![Question bank](mds/screenshots/question-bank.png) Question bank | ![Quiz sets](mds/screenshots/quiz-sets.png) A quiz, one set per student |
+| ![Student view](mds/screenshots/student-quiz.png) Student's own quiz (no answers) | |
 
 ## Quick Start
 
@@ -33,7 +45,8 @@ Then visit `http://localhost:5173` and sign in with your institute email (`first
 | `backend/app/main.py` | FastAPI server |
 | `backend/app/rag/` | LangGraph Q&A pipeline |
 | `backend/app/db/queries.py` | All SQL + access control |
-| `frontend/src/chat/` | Chat UI with sidebar |
+| `backend/app/authoring/`, `backend/app/assessments/` | Notes/decks, question bank and quiz assignment |
+| `frontend/src/chat/`, `library/`, `quizzes/` | Ask, Library, Quizzes UI |
 | `.env.example` | Config template |
 | `docker-compose.yml` | Services (Postgres, backend, frontend) |
 
