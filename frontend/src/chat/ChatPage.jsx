@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   queryLLMStream,
   listConversations,
@@ -13,8 +14,13 @@ import {
 import Icon from "../ui/Icons";
 import { ShelfGroup, Spine, WsMark } from "../ui/Shelf";
 import { hashString, nameFromEmail, toneFor } from "../ui/spines";
+import { useDocViewer } from "../ui/useDocViewer";
 import AnswerBlock from "./AnswerBlock";
 import History from "./History";
+import { useScopeMention } from "./ScopeMention";
+import { commandFor, useSlashCommand } from "./SlashCommand";
+import NewNoteDialog from "../library/NewNoteDialog";
+import QuickQuizDialog from "../quizzes/QuickQuizDialog";
 
 // How close to the bottom (in pixels) counts as "still at the bottom" for
 // auto-scroll purposes — small enough that a user who's actually scrolled
@@ -109,7 +115,24 @@ export default function ChatPage({ auth, shelves, switcher, historyOpen, onClose
   // synchronously on every scroll event, without waiting on a re-render.
   const autoScrollRef = useRef(true);
   const shelf = useAskShelf(auth, shelves);
+  const docViewer = useDocViewer(auth.token);
   const scope = shelves.option;
+  const mention = useScopeMention({
+    sections: shelves.sections,
+    textareaRef,
+    setQuery,
+    onPick: shelves.setScope,
+    afterChange: resizeTextarea,
+  });
+  const isFaculty = auth.role === "faculty";
+  const [form, setForm] = useState(null); // "ppt" | "quiz": the /command form that's open
+  const slash = useSlashCommand({
+    enabled: isFaculty,
+    setQuery,
+    onRun: (command) => setForm(command.id),
+    afterChange: resizeTextarea,
+  });
+  const navigate = useNavigate();
 
   /**
    * Reloads the list of past conversations shown in the sidebar.
@@ -123,6 +146,22 @@ export default function ChatPage({ auth, shelves, switcher, historyOpen, onClose
   useEffect(() => {
     refreshConversations();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // "/" anywhere on the page (outside a text field or dialog) jumps to the composer.
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
+      const t = e.target;
+      if (t instanceof HTMLElement && (t.isContentEditable || t.closest("input, textarea, select, [role=dialog]"))) return;
+      const el = textareaRef.current;
+      if (!el) return;
+      e.preventDefault();
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
   }, []);
 
   // Keeps the view pinned to the newest message (e.g. while an answer is
@@ -272,9 +311,33 @@ export default function ChatPage({ auth, shelves, switcher, historyOpen, onClose
     e?.preventDefault();
     const trimmed = query.trim();
     if (!trimmed || loading) return;
+    const command = isFaculty ? commandFor(trimmed) : null;
+    if (command) {
+      setQuery("");
+      requestAnimationFrame(resizeTextarea);
+      setForm(command.id);
+      return;
+    }
     setQuery("");
     requestAnimationFrame(resizeTextarea);
     await sendQuery(trimmed);
+  }
+
+  /**
+   * A /ppt or /quiz form saved something: show it in the thread as the
+   * command and a card linking to it in the Library. These cards live only
+   * in this view; the deck or quiz itself is in the Library.
+   */
+  function showCreated(command, card) {
+    setForm(null);
+    autoScrollRef.current = true;
+    setMessages((prev) => [...prev, { role: "user", content: `/${command} ${card.title}` }, { role: "created", ...card }]);
+  }
+
+  function openCreated(e, href) {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; // new tab etc.
+    e.preventDefault();
+    navigate(href); // the Library's switch to the item's workspace is the view transition
   }
 
   function startEditMessage(message) {
@@ -341,17 +404,32 @@ export default function ChatPage({ auth, shelves, switcher, historyOpen, onClose
           rows={1}
           placeholder={placeholder}
           value={query}
+          aria-expanded={mention.open || slash.open}
           onChange={(e) => {
             setQuery(e.target.value);
+            mention.sync(e.target);
+            slash.sync(e.target);
             resizeTextarea();
           }}
+          onSelect={(e) => {
+            mention.sync(e.target);
+            slash.sync(e.target);
+          }}
+          onBlur={() => {
+            mention.close();
+            slash.close();
+          }}
           onKeyDown={(e) => {
+            if (slash.handleKeyDown(e)) return;
+            if (mention.handleKeyDown(e)) return;
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               handleSubmit();
             }
           }}
         />
+        {mention.menu}
+        {slash.menu}
         <button className="btn" type="submit" disabled={loading || !query.trim()}>
           {loading ? "Asking..." : "Ask"} <Icon name="arrowUp" />
         </button>
@@ -380,7 +458,9 @@ export default function ChatPage({ auth, shelves, switcher, historyOpen, onClose
               <div className="thread" ref={threadRef} onScroll={handleThreadScroll}>
                 <div className="thread-inner">
                   {messages.map((message, i) =>
-                    message.role === "user" ? (
+                    message.role === "created" ? (
+                      <CreatedCard card={message} onOpen={openCreated} key={i} />
+                    ) : message.role === "user" ? (
                       editingMessageId === message.id ? (
                         <div className="q-editing" key={i}>
                           <textarea
@@ -441,7 +521,7 @@ export default function ChatPage({ auth, shelves, switcher, historyOpen, onClose
               </div>
               {composer}
             </div>
-            <Desk messages={messages} focused={focusedAnswer} />
+            <Desk messages={messages} focused={focusedAnswer} onOpen={docViewer.open} />
           </section>
         ) : (
           <>
@@ -454,7 +534,7 @@ export default function ChatPage({ auth, shelves, switcher, historyOpen, onClose
                     {shelf.value === "blank" ? (
                       <BlankShelf />
                     ) : (
-                      <BookShelf groups={shelf.value} isFaculty={auth.role === "faculty"} />
+                      <BookShelf groups={shelf.value} isFaculty={auth.role === "faculty"} onOpen={docViewer.open} />
                     )}
                   </div>
                   {auth.role === "student" && !scope.id && <ClassroomCards shelves={shelves} />}
@@ -464,8 +544,87 @@ export default function ChatPage({ auth, shelves, switcher, historyOpen, onClose
             {composer}
           </>
         )}
+        {docViewer.error && (
+          <p className="form-error doc-open-error" role="alert">
+            {docViewer.error}
+          </p>
+        )}
       </main>
+      {docViewer.viewer}
+      {form === "ppt" && (
+        <NewNoteDialog
+          token={auth.token}
+          workspaces={shelves.workspaces.map((w) => ({ id: w.id, name: workspaceName(w) }))}
+          workspaceId={defaultWorkspace(shelves, scope, "ppt")}
+          onClose={() => setForm(null)}
+          onCreated={(note) =>
+            showCreated("ppt", {
+              kind: "deck",
+              title: note.title,
+              sub: `Slide deck, ${note.slides.length} slide${note.slides.length === 1 ? "" : "s"}, in ${workspaceName(
+                shelves.workspaces.find((w) => w.id === note.workspace_id)
+              )}`,
+              href: `/library?ws=${note.workspace_id}&deck=${note.id}`,
+            })
+          }
+        />
+      )}
+      {form === "quiz" && (
+        <QuickQuizDialog
+          token={auth.token}
+          workspaces={shelves.workspaces.filter((w) => w.kind === "shared").map((w) => ({ id: w.id, name: w.name }))}
+          workspaceId={defaultWorkspace(shelves, scope, "quiz")}
+          onClose={() => setForm(null)}
+          onCreated={({ assessment, workspaceId, classroom, written }) =>
+            showCreated("quiz", {
+              kind: "quiz",
+              title: assessment.title,
+              sub: `Quiz for ${classroom.name}, ${assessment.config.count} questions per student. ${written} new question${
+                written === 1 ? "" : "s"
+              } added to the bank.`,
+              href: `/library?ws=${workspaceId}&quiz=${assessment.id}&class=${classroom.id}`,
+            })
+          }
+        />
+      )}
     </>
+  );
+}
+
+function workspaceName(w) {
+  return !w ? "a workspace" : w.kind === "personal" ? "My workspace" : w.name;
+}
+
+/**
+ * Where a /ppt or /quiz form starts: the workspace Ask is scoped to if it
+ * can hold one (quizzes need a shared workspace), else the personal one
+ * (decks) or the first shared one (quizzes).
+ */
+function defaultWorkspace(shelves, scope, command) {
+  const fits = (w) => command === "ppt" || w.kind === "shared";
+  const scoped = shelves.workspaces.find((w) => w.id === scope.id);
+  if (scoped && fits(scoped)) return scoped.id;
+  const preferred = shelves.workspaces.find((w) => (command === "ppt" ? w.kind === "personal" : w.kind === "shared"));
+  return (preferred ?? shelves.workspaces.find(fits))?.id;
+}
+
+/**
+ * What a /ppt or /quiz made, with a link that opens it in the Library.
+ */
+function CreatedCard({ card, onOpen }) {
+  return (
+    <article className="a created-card">
+      <span className={`note-kind${card.kind === "deck" ? " is-slides" : ""}`}>
+        <Icon name={card.kind === "deck" ? "slides" : "quiz"} />
+      </span>
+      <div>
+        <b>{card.title}</b>
+        <small>{card.sub}</small>
+      </div>
+      <a className="btn" href={card.href} onClick={(e) => onOpen(e, card.href)}>
+        Open in Library
+      </a>
+    </article>
   );
 }
 
@@ -540,7 +699,7 @@ function BlankShelf() {
 /**
  * The ready books on the picked workspace or classroom, grouped.
  */
-function BookShelf({ groups, isFaculty }) {
+function BookShelf({ groups, isFaculty, onOpen }) {
   if (groups.length === 0) {
     // Same untitled shelf as "All", so an empty workspace doesn't look broken.
     return (
@@ -560,7 +719,14 @@ function BookShelf({ groups, isFaculty }) {
       {groups.map((g) => (
         <ShelfGroup key={g.key} label={g.label} tone={g.tone} count={g.docs.length}>
           {g.docs.map((d) => (
-            <Spine key={d.id} doc={d} scale={scale} locked={Boolean(g.locked)} />
+            <Spine
+              key={d.id}
+              as="button"
+              doc={d}
+              scale={scale}
+              locked={Boolean(g.locked)}
+              onClick={() => onOpen(d)}
+            />
           ))}
         </ShelfGroup>
       ))}
@@ -601,7 +767,7 @@ function ClassroomCards({ shelves }) {
  * the `focused` answer (index into `messages`) are highlighted and the rest
  * dimmed, so you can see which docs each answer read.
  */
-function Desk({ messages, focused }) {
+function Desk({ messages, focused, onOpen }) {
   const seen = new Map();
   for (const m of messages) {
     if (m.role !== "assistant") continue;
@@ -641,9 +807,16 @@ function Desk({ messages, focused }) {
         {docs.map((d) => {
           const state = highlighted.size === 0 ? "" : highlighted.has(d.doc_id) ? " is-active" : " is-dim";
           return (
-            <div className={`flat${state}`} data-tone={toneFor(d.doc_id)} key={d.doc_id} title={d.title}>
+            <button
+              type="button"
+              className={`flat${state}`}
+              data-tone={toneFor(d.doc_id)}
+              key={d.doc_id}
+              title={`${d.title}: click to open`}
+              onClick={() => onOpen(d)}
+            >
               <span>{d.title}</span>
-            </div>
+            </button>
           );
         })}
       </div>

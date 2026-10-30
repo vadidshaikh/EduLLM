@@ -1,15 +1,15 @@
-"""Faculty notes and slide decks (Phase 3).
+"""Faculty slide decks (Phase 3). The table and routes are still called
+"notes"; every note is a deck (kind "slides").
 
 A note belongs to a workspace and, like its documents, can be read and
 changed by any of its faculty (owner or editor). It is written from some of
 the workspace's documents and the institute library's ("sources"), usually
 starting from an LLM draft, and remembers which version of each source it
 used. When a source is re-uploaded or removed the note shows as stale; the
-faculty member can redraft it (or one section) and compare before saving,
+faculty member can redraft it and compare before saving,
 or mark it up to date. Nothing is ever rewritten automatically.
 
-Publishing a note uploads it as an ordinary workspace document (Markdown
-for notes, .pptx for decks) through the normal ingestion pipeline, so it's
+Publishing a note uploads it as an ordinary workspace document (.pptx) through the normal ingestion pipeline, so it's
 searchable from Ask, can be published to classrooms, and gets audit events
 and update notices like any upload. Republishing replaces that document.
 
@@ -27,14 +27,14 @@ from app.api.schemas import (
     NoteSourceDocumentOut,
     NoteSummaryOut,
     PublishNoteRequest,
-    RedraftRequest,
     RedraftResponse,
+    ReviseNoteRequest,
     UpdateNoteRequest,
 )
 from app.api.workspaces import member_workspace
 from app.auth.dependencies import require_faculty
-from app.authoring.generate import GenerationError, clean_slides, draft_notes, draft_slides, redraft_section
-from app.authoring.render import deck_pptx, notes_markdown
+from app.authoring.generate import GenerationError, clean_slides, draft_slides, revise_slides
+from app.authoring.render import deck_pptx
 from app.db import queries
 from app.ingestion.pipeline import run_ingestion
 from app.storage import compute_file_hash, delete_stored_file, save_upload_file
@@ -75,12 +75,8 @@ def _note(note_id: UUID, claims: dict) -> dict:
 
 
 def _file_name(note: dict) -> str:
-    stem = re.sub(r"[^\w\- ]+", "", note["title"]).strip() or "note"
-    return f"{stem}.pptx" if note["kind"] == "slides" else f"{stem}.md"
-
-
-def _file_bytes(note: dict) -> bytes:
-    return deck_pptx(note) if note["kind"] == "slides" else notes_markdown(note).encode()
+    stem = re.sub(r"[^\w\- ]+", "", note["title"]).strip() or "deck"
+    return f"{stem}.pptx"
 
 
 @router.get("/workspaces/{workspace_id}/note-sources", response_model=list[NoteSourceDocumentOut])
@@ -100,7 +96,7 @@ def list_notes(workspace_id: UUID, claims: dict = Depends(require_faculty)) -> l
 
 @router.post("/workspaces/{workspace_id}/notes", response_model=NoteOut)
 def create_note(workspace_id: UUID, body: CreateNoteRequest, claims: dict = Depends(require_faculty)) -> NoteOut:
-    """Creates notes or a deck from the chosen sources. With `generate`
+    """Creates a deck from the chosen sources. With `generate`
     (the default) the LLM writes the first draft, which is saved straight
     away so a slow generation isn't lost; it isn't published until the
     faculty member publishes it.
@@ -122,7 +118,7 @@ def create_note(workspace_id: UUID, body: CreateNoteRequest, claims: dict = Depe
         {"doc_id": str(i), "title": allowed[i]["title"], "version": allowed[i]["version"]} for i in source_ids
     ]
 
-    body_md, slides = "", []
+    slides = []
     if body.generate:
         brief = {
             "title": title,
@@ -132,20 +128,17 @@ def create_note(workspace_id: UUID, body: CreateNoteRequest, claims: dict = Depe
             "sources": sources,
         }
         try:
-            if body.kind == "slides":
-                slides = draft_slides(claims, **brief)
-            else:
-                body_md = draft_notes(claims, **brief)
+            slides = draft_slides(claims, **brief)
         except GenerationError as exc:
             raise _generation_failed(exc) from exc
 
     note_id = queries.insert_note(
         workspace_id=workspace_id,
-        kind=body.kind,
+        kind="slides",
         title=title,
         subject=subject,
         topic=topic,
-        body_md=body_md,
+        body_md="",
         slides=slides,
         sources=sources,
         actor_email=claims["sub"],
@@ -172,8 +165,6 @@ def update_note(note_id: UUID, body: UpdateNoteRequest, claims: dict = Depends(r
         changes["topic"] = _required_text(body.topic, "topic")
     if body.subject is not None:
         changes["subject"] = _optional_text(body.subject)
-    if body.body_md is not None:
-        changes["body_md"] = body.body_md
     if body.slides is not None:
         changes["slides"] = clean_slides([s.model_dump() for s in body.slides])
     if body.mark_up_to_date:
@@ -204,35 +195,60 @@ def delete_note(note_id: UUID, claims: dict = Depends(require_faculty)) -> None:
 
 
 @router.post("/notes/{note_id}/redraft", response_model=RedraftResponse)
-def redraft_note(note_id: UUID, body: RedraftRequest, claims: dict = Depends(require_faculty)) -> RedraftResponse:
-    """Writes a new draft from the sources' current versions, for the
-    editor to compare and accept or discard: the whole note or deck, or one
-    `## ` section of notes. Saves nothing.
+def redraft_note(note_id: UUID, claims: dict = Depends(require_faculty)) -> RedraftResponse:
+    """Writes a new deck from the sources' current versions, for the editor
+    to compare and accept or discard. Saves nothing.
     """
     note = _note(note_id, claims)
-    brief = {"title": note["title"], "topic": note["topic"], "sources": note["sources"]}
     try:
-        if body.section is not None:
-            if note["kind"] != "notes":
-                raise _unprocessable("sections can only be redrafted in notes")
-            if not body.section.lstrip().startswith("## "):
-                raise _unprocessable("a section starts with a '## ' heading")
-            return RedraftResponse(body_md=redraft_section(claims, section=body.section, **brief))
-        brief.update(subject=note["subject"], instructions=None)
-        if note["kind"] == "slides":
-            return RedraftResponse(slides=draft_slides(claims, **brief))
-        return RedraftResponse(body_md=draft_notes(claims, **brief))
+        return RedraftResponse(
+            slides=draft_slides(
+                claims,
+                title=note["title"],
+                topic=note["topic"],
+                subject=note["subject"],
+                instructions=None,
+                sources=note["sources"],
+            )
+        )
+    except GenerationError as exc:
+        raise _generation_failed(exc) from exc
+
+
+@router.post("/notes/{note_id}/revise", response_model=RedraftResponse)
+def revise_note(note_id: UUID, body: ReviseNoteRequest, claims: dict = Depends(require_faculty)) -> RedraftResponse:
+    """Applies a change the faculty member asks for in words ("add a slide
+    on paging", "remove slide 4", "make the examples simpler") to the deck
+    as it is in the editor. A proposal only, like a redraft: nothing is
+    saved until the editor saves it.
+    """
+    note = _note(note_id, claims)
+    request = _required_text(body.request, "the change")
+    if len(request) > 1000:
+        raise _unprocessable("describe the change in at most 1000 characters")
+    try:
+        return RedraftResponse(
+            slides=revise_slides(
+                claims,
+                title=note["title"],
+                topic=note["topic"],
+                subject=note["subject"],
+                slides=clean_slides([s.model_dump() for s in body.slides]),
+                request=request,
+                sources=note["sources"],
+            )
+        )
     except GenerationError as exc:
         raise _generation_failed(exc) from exc
 
 
 @router.get("/notes/{note_id}/download")
 def download_note(note_id: UUID, claims: dict = Depends(require_faculty)) -> Response:
-    """The saved note as a file: .pptx for decks, .md for notes."""
+    """The saved deck as a .pptx file."""
     note = _note(note_id, claims)
     return Response(
-        _file_bytes(note),
-        media_type=_PPTX_TYPE if note["kind"] == "slides" else "text/markdown; charset=utf-8",
+        deck_pptx(note),
+        media_type=_PPTX_TYPE,
         headers={"Content-Disposition": f'attachment; filename="{_file_name(note)}"'},
     )
 
@@ -250,7 +266,7 @@ def publish_note(
     note = _note(note_id, claims)
     workspace = member_workspace(note["workspace_id"], claims)
     classroom_ids = check_access(workspace, body.visibility, body.classroom_ids)
-    if (note["kind"] == "notes" and not note["body_md"].strip()) or (note["kind"] == "slides" and not note["slides"]):
+    if not note["slides"]:
         raise _unprocessable("there's nothing to publish yet")
 
     same_title = queries.find_document_by_title(note["workspace_id"], note["title"])
@@ -261,7 +277,7 @@ def publish_note(
         )
 
     previous = queries.get_document(note["document_id"]) if note["document_id"] else None
-    file_bytes = _file_bytes(note)
+    file_bytes = deck_pptx(note)
     filename = _file_name(note)
     storage_path = save_upload_file(file_bytes, filename)
     document = queries.insert_document(

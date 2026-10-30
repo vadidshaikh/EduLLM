@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ApiError, createQuestion, deleteQuestion, updateQuestion } from "../api/client";
 import Icon from "../ui/Icons";
 import { DIFFICULTY_LABEL, TYPE_LABEL, TYPES, letter } from "./labels";
+import { confirmDialog } from "../ui/confirm";
 
 function initialForm(question, defaults) {
   if (!question) {
@@ -78,7 +79,13 @@ export default function QuestionDialog({ token, workspaceId, question, defaults,
   }
 
   async function remove() {
-    if (!window.confirm("Delete this question from the bank?")) return;
+    const ok = await confirmDialog({
+      title: "Delete this question?",
+      message: "It's removed from the bank.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       await deleteQuestion(token, question.id);

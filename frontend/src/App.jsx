@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "./auth/useAuth";
 import { useTheme } from "./ThemeContext";
@@ -13,6 +13,7 @@ import NewWorkspaceDialog from "./shell/NewWorkspaceDialog";
 import { useShelves } from "./shell/useShelves";
 import Icon from "./ui/Icons";
 import Logo from "./ui/Logo";
+import ConfirmHost from "./ui/ConfirmHost";
 import { SpineTooltip } from "./ui/Shelf";
 import { smoothly } from "./ui/transition";
 import { nameFromEmail } from "./ui/spines";
@@ -46,7 +47,7 @@ export default function App() {
 }
 
 /**
- * Top bar (shelf switcher, Ask / Library, notices, theme, who's signed in)
+ * Top bar (Ask / Library, notices, theme, who's signed in)
  * over the current view. The switcher's one choice drives both views: what
  * Ask searches and which library the Library view shows (faculty).
  */
@@ -58,19 +59,24 @@ function AppShell({ auth }) {
   const [creating, setCreating] = useState(false); // the "New shared workspace" dialog
   const navigate = useNavigate();
   const isFaculty = auth.role === "faculty";
-  const view =
-    isFaculty && location.pathname.startsWith("/library")
-      ? "library"
-      : !isFaculty && location.pathname.startsWith("/work")
-        ? "work"
-        : "ask";
+  // Both roles have a Library at /library: faculty manage workspaces there,
+  // students see their classrooms' docs, quizzes and assignments.
+  const view = location.pathname.startsWith("/library") ? (isFaculty ? "library" : "work") : "ask";
   const [libraryMounted, setLibraryMounted] = useState(view === "library");
   if (view === "library" && !libraryMounted) setLibraryMounted(true);
   const [workMounted, setWorkMounted] = useState(view === "work");
   if (view === "work" && !workMounted) setWorkMounted(true);
   const name = nameFromEmail(auth.sub);
-  // The one shelf choice both views follow: in the topbar on Library, at
-  // the top of the history sidebar on Ask.
+  // A link to something in the Library (/library?ws=<workspace>&deck=... or
+  // &quiz=..., from Ask's /ppt and /quiz) picks its workspace in the
+  // switcher; the Library then opens the item and drops the params.
+  const linkedWorkspace = view === "library" ? new URLSearchParams(location.search).get("ws") : null;
+  const { loaded: shelvesLoaded, option: shelfOption, setScope } = shelves;
+  useEffect(() => {
+    if (linkedWorkspace && shelvesLoaded && shelfOption.id !== linkedWorkspace) setScope(linkedWorkspace);
+  }, [linkedWorkspace, shelvesLoaded, shelfOption.id, setScope]);
+  // The one shelf choice both views follow: at the top of the left panel
+  // in both views (Ask's history, the Library's sections).
   const switcher = (
     <ScopeSwitcher
       auth={auth}
@@ -101,23 +107,15 @@ function AppShell({ auth }) {
             </button>
           )}
           <Logo />
-          {/* On Ask the switcher sits in the history sidebar instead */}
-          {view === "library" && switcher}
         </div>
         <nav className="nav" aria-label="Main">
           <NavLink to="/" end onClick={(e) => go(e, "/")}>
             Ask
           </NavLink>
           {/* Library opens on whatever the switcher has picked ("All my shelves" = the overview) */}
-          {isFaculty ? (
-            <NavLink to="/library" onClick={(e) => go(e, "/library")}>
-              Library
-            </NavLink>
-          ) : (
-            <NavLink to="/work" onClick={(e) => go(e, "/work")}>
-              Quizzes
-            </NavLink>
-          )}
+          <NavLink to="/library" onClick={(e) => go(e, "/library")}>
+            Library
+          </NavLink>
         </nav>
         <div className="topbar-right">
           <Notices token={auth.token} />
@@ -156,24 +154,25 @@ function AppShell({ auth }) {
         </div>
         {/* mounted on first visit, then kept */}
         {libraryMounted && (
-          <div className={`view view-library${view === "library" ? "" : " is-hidden"}`} inert={view !== "library"}>
+          <div className={`view view-library view-lib${view === "library" ? "" : " is-hidden"}`} inert={view !== "library"}>
             <LibraryPage
               auth={auth}
               shelves={shelves}
+              switcher={switcher}
               active={view === "library"}
               onNewWorkspace={() => setCreating(true)}
             />
           </div>
         )}
         {workMounted && (
-          <div className={`view view-library${view === "work" ? "" : " is-hidden"}`} inert={view !== "work"}>
-            <MyAssessmentsPage auth={auth} active={view === "work"} />
+          <div className={`view view-library view-lib${view === "work" ? "" : " is-hidden"}`} inert={view !== "work"}>
+            <MyAssessmentsPage auth={auth} shelves={shelves} switcher={switcher} active={view === "work"} />
           </div>
         )}
         <Routes>
           <Route path="/" element={null} />
-          <Route path="/work" element={isFaculty ? <Navigate to="/" replace /> : null} />
-          <Route path="/library" element={isFaculty ? null : <Navigate to="/" replace />} />
+          <Route path="/work" element={<Navigate to="/library" replace />} />
+          <Route path="/library" element={null} />
           <Route path="/admin" element={<Navigate to="/library" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
@@ -191,6 +190,7 @@ function AppShell({ auth }) {
         />
       )}
       <SpineTooltip />
+      <ConfirmHost />
     </div>
   );
 }

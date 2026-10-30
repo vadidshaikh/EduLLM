@@ -5,20 +5,28 @@ import { timeAgo } from "../ui/spines";
 import { smoothly } from "../ui/transition";
 import AssessmentView from "./AssessmentView";
 import NewAssessmentDialog from "./NewAssessmentDialog";
+import Loading from "../ui/Loading";
 
 /**
  * One classroom's quizzes and assignments at a time: the list, the "new"
- * dialog, and the one that's open.
+ * dialog, and the one that's open. `focus` ({quiz, classroomId}) opens that one.
  */
-export default function AssessmentsPanel({ token, workspace, classrooms }) {
+export default function AssessmentsPanel({ token, workspace, classrooms, focus }) {
   const active = classrooms.filter((c) => !c.archived_at);
-  const [classroomId, setClassroomId] = useState(active[0]?.id ?? "");
+  const [classroomId, setClassroomId] = useState(focus?.classroomId ?? active[0]?.id ?? "");
   const classroom = active.find((c) => c.id === classroomId) ?? active[0];
   const [items, setItems] = useState(null);
   const [error, setError] = useState("");
   const [openId, setOpenIdNow] = useState(null);
   const setOpenId = (id) => smoothly(() => setOpenIdNow(id));
   const [creating, setCreating] = useState(null); // "quiz" | "assignment"
+
+  useEffect(() => {
+    if (!focus) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- opening what a link points at
+    if (focus.classroomId) setClassroomId(focus.classroomId);
+    setOpenIdNow(focus.quiz);
+  }, [focus]);
 
   const currentId = classroom?.id;
 
@@ -83,12 +91,12 @@ export default function AssessmentsPanel({ token, workspace, classrooms }) {
       </div>
       <p className="panel-hint notes-hint">
         An assignment is one set for the class, with no question another classroom&apos;s assignment uses in the same
-        subject and term. A quiz gives every student their own set with the same mix of topics and difficulty.
+        subject and term. A quiz gives every student their own random set from the chapters (docs) you pick.
       </p>
       {error && <p className="form-error lib-note">{error}</p>}
 
       {items === null && !error ? (
-        <p className="desk-empty">Loading...</p>
+        <Loading label="Loading quizzes and assignments" />
       ) : items?.length === 0 ? (
         <div className="table-wrap">
           <div className="empty-state is-compact">

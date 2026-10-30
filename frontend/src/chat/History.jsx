@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import Icon from "../ui/Icons";
 import { toneFor } from "../ui/spines";
+import { confirmDialog } from "../ui/confirm";
 
 const DAY_MS = 86_400_000;
 
@@ -185,10 +186,16 @@ export default function History({
             </button>
             <button
               className="danger"
-              onClick={() => {
+              onClick={async () => {
                 const id = menu.conversation.id;
                 setMenu(null);
-                if (window.confirm("Delete this conversation? This can't be undone.")) onDelete(id);
+                const ok = await confirmDialog({
+                  title: "Delete this conversation?",
+                  message: "Its questions and answers are removed for good.",
+                  confirmLabel: "Delete",
+                  danger: true,
+                });
+                if (ok) onDelete(id);
               }}
             >
               <Icon name="trash" /> Delete

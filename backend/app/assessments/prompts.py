@@ -6,7 +6,7 @@ Write exactly the number of questions asked for, of the requested types and
 difficulties. Return them as JSON, and nothing else, in exactly this shape:
 
 {"questions": [
-  {"type": "mcq", "difficulty": 2, "topic": "short topic label",
+  {"type": "mcq", "difficulty": 2, "subject": "subject name", "topic": "short topic label",
    "prompt": "the question", "options": ["A", "B", "C", "D"], "correct": 0,
    "explanation": "why the answer is right", "excerpts": [3]}
 ]}
@@ -16,6 +16,7 @@ Fields:
   "long" (answered in a page: explain, derive, compare or design).
 - "difficulty": 1 = recall a definition or fact, 2 = apply or explain,
   3 = analyse, combine ideas or solve a multi-step problem.
+- "subject": the course the question belongs to, as described in the brief.
 - "topic": a 1-4 word label for the sub-topic the question tests. Reuse the
   same label for questions on the same sub-topic.
 - "options" and "correct": only for mcq. 4 options, exactly one correct;

@@ -6,14 +6,15 @@ import SourcePicker from "./SourcePicker";
 const MAX_SOURCES = 8;
 
 /**
- * Starts notes or a slide deck: what it's about, which docs to write it
+ * Starts a slide deck: what it's about, which docs to write it
  * from (this workspace's and the institute library's), and optional
  * guidance. "Write draft" has the model write it first (up to a minute or
  * so); "Start blank" opens an empty one tied to the same sources.
- * `onCreated(note)` gets the saved note.
+ * `onCreated(note)` gets the saved note. Given `workspaces` ([{id, name}],
+ * from Ask's /ppt), it starts in `workspaceId` and asks which one to use.
  */
-export default function NewNoteDialog({ token, workspaceId, initialKind, onClose, onCreated }) {
-  const [kind, setKind] = useState(initialKind);
+export default function NewNoteDialog({ token, workspaceId: initialWorkspaceId, workspaces, onClose, onCreated }) {
+  const [workspaceId, setWorkspaceId] = useState(initialWorkspaceId);
   const [title, setTitle] = useState("");
   const [topic, setTopic] = useState("");
   const [subject, setSubject] = useState("");
@@ -24,6 +25,7 @@ export default function NewNoteDialog({ token, workspaceId, initialKind, onClose
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (!workspaceId) return undefined;
     let cancelled = false;
     listNoteSources(token, workspaceId)
       .then((rows) => !cancelled && setDocs(rows))
@@ -47,7 +49,6 @@ export default function NewNoteDialog({ token, workspaceId, initialKind, onClose
     setError("");
     try {
       const note = await createNote(token, workspaceId, {
-        kind,
         title: title.trim() || topic.trim().slice(0, 80),
         topic: topic.trim(),
         subject: subject.trim() || null,
@@ -62,14 +63,20 @@ export default function NewNoteDialog({ token, workspaceId, initialKind, onClose
     }
   }
 
-  const ready = topic.trim() && picked.length > 0;
+  const ready = workspaceId && topic.trim() && picked.length > 0;
+
+  function pickWorkspace(id) {
+    setWorkspaceId(id);
+    setDocs(null);
+    setPicked([]); // the other workspace's docs aren't sources here
+  }
 
   return (
     <>
       <div className="scrim is-open" onClick={busy ? undefined : onClose} />
       <div className="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="new-note-title">
         <div className="modal-head">
-          <h2 id="new-note-title">{kind === "slides" ? "New slide deck" : "New notes"}</h2>
+          <h2 id="new-note-title">New slide deck</h2>
           <button className="icon-btn" aria-label="Close" disabled={Boolean(busy)} onClick={onClose}>
             <Icon name="x" />
           </button>
@@ -81,14 +88,26 @@ export default function NewNoteDialog({ token, workspaceId, initialKind, onClose
             submit(true);
           }}
         >
-          <div className="seg" role="group" aria-label="What to write">
-            <button type="button" aria-pressed={kind === "notes"} disabled={Boolean(busy)} onClick={() => setKind("notes")}>
-              Notes
-            </button>
-            <button type="button" aria-pressed={kind === "slides"} disabled={Boolean(busy)} onClick={() => setKind("slides")}>
-              Slide deck
-            </button>
-          </div>
+          {workspaces && (
+            <div>
+              <label className="field-label" htmlFor="note-workspace">
+                Workspace <span className="optional">the deck is saved in its Slides tab</span>
+              </label>
+              <select
+                id="note-workspace"
+                className="input"
+                value={workspaceId ?? ""}
+                disabled={Boolean(busy)}
+                onChange={(e) => pickWorkspace(e.target.value)}
+              >
+                {workspaces.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div>
             <label className="field-label" htmlFor="note-topic">
@@ -141,11 +160,7 @@ export default function NewNoteDialog({ token, workspaceId, initialKind, onClose
               id="note-instructions"
               className="input"
               rows={2}
-              placeholder={
-                kind === "slides"
-                  ? "e.g. For a 50-minute lecture, second-year students; include one worked example"
-                  : "e.g. Keep it to two pages; add a worked example for each algorithm"
-              }
+              placeholder="e.g. For a 50-minute lecture, second-year students; include one worked example"
               value={instructions}
               onChange={(e) => setInstructions(e.target.value)}
             />
@@ -154,7 +169,7 @@ export default function NewNoteDialog({ token, workspaceId, initialKind, onClose
           {busy === "draft" && (
             <p className="note-box">
               <b>Writing the draft from {picked.length} doc{picked.length === 1 ? "" : "s"}...</b> This usually takes
-              under a minute{kind === "slides" ? " or two for a deck" : ""}. Keep this open.
+              a minute or two. Keep this open.
             </p>
           )}
           {error && <p className="form-error">{error}</p>}

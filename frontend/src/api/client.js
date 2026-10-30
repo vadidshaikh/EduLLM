@@ -370,14 +370,14 @@ export function listNotes(token, workspaceId) {
 }
 
 /**
- * Creates notes or a deck (`kind`: "notes" | "slides") from source docs. With `generate` the
+ * Creates a slide deck from source docs. With `generate` the
  * model writes the first draft first, which can take a minute.
  */
-export function createNote(token, workspaceId, { kind, title, topic, subject, sourceDocIds, instructions, generate = true }) {
+export function createNote(token, workspaceId, { title, topic, subject, sourceDocIds, instructions, generate = true }) {
   return request(`/workspaces/${workspaceId}/notes`, {
     method: "POST",
     token,
-    body: { kind, title, topic, subject, source_doc_ids: sourceDocIds, instructions, generate },
+    body: { kind: "slides", title, topic, subject, source_doc_ids: sourceDocIds, instructions, generate },
   });
 }
 
@@ -386,7 +386,7 @@ export function getNote(token, noteId) {
 }
 
 /**
- * Saves edits ({title, subject, topic, body_md, slides, mark_up_to_date}). `baseUpdatedAt` is the
+ * Saves edits ({title, subject, topic, slides, mark_up_to_date}). `baseUpdatedAt` is the
  * note's updated_at when it was loaded; the save fails with 409 if someone else saved since.
  */
 export function updateNote(token, noteId, baseUpdatedAt, changes) {
@@ -398,11 +398,19 @@ export function deleteNote(token, noteId) {
 }
 
 /**
- * Asks for a new draft from the sources' current versions: one "## " section of notes (`section`,
- * its current text), or the whole note/deck. Returns {body_md} or {slides}; nothing is saved.
+ * Asks for a new draft of the deck from the sources' current versions. Returns {slides}; nothing
+ * is saved.
  */
-export function redraftNote(token, noteId, section = null) {
-  return request(`/notes/${noteId}/redraft`, { method: "POST", token, body: { section } });
+export function redraftNote(token, noteId) {
+  return request(`/notes/${noteId}/redraft`, { method: "POST", token });
+}
+
+/**
+ * Applies a change described in words ("add a slide on paging", "remove the summary") to `slides`,
+ * the deck as it is in the editor. Returns {slides}; nothing is saved.
+ */
+export function reviseNote(token, noteId, changeRequest, slides) {
+  return request(`/notes/${noteId}/revise`, { method: "POST", token, body: { request: changeRequest, slides } });
 }
 
 /**
@@ -417,7 +425,7 @@ export function publishNote(token, noteId, { visibility, classroomIds = [] }) {
 }
 
 /**
- * Downloads the saved note as a file (.pptx for decks, .md for notes) through the browser.
+ * Downloads the saved note as a file (.pptx) through the browser.
  */
 export async function downloadNote(token, noteId) {
   const res = await fetch(`${BASE_URL}/notes/${noteId}/download`, { headers: { Authorization: `Bearer ${token}` } });
@@ -448,11 +456,11 @@ export function listQuestions(token, workspaceId) {
  * Has the model draft questions from source docs (saved as drafts; near-duplicates dropped). Can take a
  * minute or two. Returns {questions, duplicates}.
  */
-export function generateQuestions(token, workspaceId, { subject, topic, sourceDocIds, count, types, difficulties, instructions }) {
+export function generateQuestions(token, workspaceId, { sourceDocIds, count, types, difficulties, instructions }) {
   return request(`/workspaces/${workspaceId}/questions/generate`, {
     method: "POST",
     token,
-    body: { subject, topic, source_doc_ids: sourceDocIds, count, types, difficulties, instructions },
+    body: { source_doc_ids: sourceDocIds, count, types, difficulties, instructions },
   });
 }
 
@@ -485,6 +493,11 @@ export function deleteQuestion(token, questionId) {
 
 export function listAssessments(token, classroomId) {
   return request(`/classrooms/${classroomId}/assessments`, { token });
+}
+
+/** Faculty: how a classroom is doing across its quizzes and assignments. */
+export function getClassroomAnalytics(token, classroomId) {
+  return request(`/classrooms/${classroomId}/analytics`, { token });
 }
 
 /**
@@ -529,6 +542,61 @@ export function listMyAssessments(token) {
  */
 export function getMyAssessment(token, assessmentId) {
   return request(`/my/assessments/${assessmentId}`, { token });
+}
+
+/**
+ * Student: hands in answers ([{position, choice}], choice = option index as shown, null = blank),
+ * once. Returns the assessment with their marks.
+ */
+export function submitMyAssessment(token, assessmentId, answers) {
+  return request(`/my/assessments/${assessmentId}/submit`, { method: "POST", token, body: { answers } });
+}
+
+/**
+ * Fetches a file the API serves (with the session's token) as a Blob.
+ */
+async function fetchBlob(path, token) {
+  const res = await fetch(`${BASE_URL}${path}`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, detail.detail || res.statusText);
+  }
+  return res.blob();
+}
+
+/**
+ * Student: hands in an assignment as a PDF (up to 20 MB), replacing an earlier one. Returns the assessment.
+ */
+export function handInAssignment(token, assessmentId, file) {
+  const form = new FormData();
+  form.append("file", file);
+  return request(`/my/assessments/${assessmentId}/hand-in`, { method: "POST", token, body: form, isForm: true });
+}
+
+/** A document's original file (PDF, .pptx, ...), for anyone who can read it, as a Blob. */
+export function getDocumentFile(token, documentId) {
+  return fetchBlob(`/documents/${documentId}/file`, token);
+}
+
+/** Student: their own handed-in PDF, as a Blob. */
+export function getMyHandIn(token, assessmentId) {
+  return fetchBlob(`/my/assessments/${assessmentId}/hand-in`, token);
+}
+
+/** Faculty: a student's handed-in PDF, as a Blob. */
+export function getHandIn(token, assessmentId, email) {
+  return fetchBlob(`/assessments/${assessmentId}/submissions/${encodeURIComponent(email)}/file`, token);
+}
+
+/**
+ * Faculty: ticks an assignment off as handed in for a student (paper copy), or undoes that.
+ * Returns the updated assessment.
+ */
+export function setHandedIn(token, assessmentId, email, handedIn) {
+  return request(`/assessments/${assessmentId}/submissions/${encodeURIComponent(email)}`, {
+    method: handedIn ? "PUT" : "DELETE",
+    token,
+  });
 }
 
 export { ApiError };

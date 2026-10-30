@@ -67,6 +67,7 @@ class TokenResponse(BaseModel):
 class DocumentOut(BaseModel):
     id: UUID
     title: str
+    filename: str
     workspace_id: UUID | None
     visibility: str
     classroom_ids: list[UUID]
@@ -219,6 +220,7 @@ class ReadableDocumentOut(BaseModel):
     """A document as anyone who can read it sees it: no access details."""
     id: UUID
     title: str
+    filename: str
 
 
 class ScopeOut(BaseModel):
@@ -264,7 +266,7 @@ class SourceStatusOut(BaseModel):
 class NoteSummaryOut(BaseModel):
     id: UUID
     workspace_id: UUID
-    kind: Literal["notes", "slides"]
+    kind: Literal["slides"]
     title: str
     subject: str | None
     topic: str
@@ -286,19 +288,18 @@ class NoteSummaryOut(BaseModel):
 
 
 class NoteOut(NoteSummaryOut):
-    body_md: str
     slides: list[Slide]
     sources: list[NoteSource]
 
 
 class CreateNoteRequest(BaseModel):
-    kind: Literal["notes", "slides"]
+    kind: Literal["slides"] = "slides"  # decks are the only kind
     title: str
     topic: str
     subject: str | None = None
     source_doc_ids: list[UUID]
     instructions: str | None = None  # extra guidance for the draft
-    generate: bool = True  # False starts an empty note from the same sources
+    generate: bool = True  # False starts an empty deck from the same sources
 
 
 class UpdateNoteRequest(BaseModel):
@@ -308,7 +309,6 @@ class UpdateNoteRequest(BaseModel):
     title: str | None = None
     subject: str | None = None
     topic: str | None = None
-    body_md: str | None = None
     slides: list[Slide] | None = None
     # Record the sources' current versions: the faculty member has checked
     # the note against them, so it's no longer stale. Removed sources are
@@ -316,16 +316,16 @@ class UpdateNoteRequest(BaseModel):
     mark_up_to_date: bool = False
 
 
-class RedraftRequest(BaseModel):
-    # One "## " section of the notes (from the editor, so unsaved edits
-    # count) to rewrite; omitted redrafts the whole note or deck.
-    section: str | None = None
+class ReviseNoteRequest(BaseModel):
+    # What to change, in the faculty member's words ("add a slide on TLBs").
+    request: str
+    # The deck as it is in the editor, so unsaved edits are kept.
+    slides: list[Slide]
 
 
 class RedraftResponse(BaseModel):
     """A proposal only; nothing is saved until the editor saves it."""
-    body_md: str | None = None  # whole notes or the one section
-    slides: list[Slide] | None = None
+    slides: list[Slide]
 
 
 class PublishNoteRequest(BaseModel):
@@ -367,11 +367,10 @@ class QuestionOut(BaseModel):
 
 
 class GenerateQuestionsRequest(BaseModel):
-    subject: str
-    topic: str
     source_doc_ids: list[UUID]
-    count: int = Field(10, ge=1, le=15)
-    types: list[QuestionType] = ["mcq", "short"]
+    count: int = Field(10, ge=10, le=50)
+    # ["mcq"] for quizzes, ["short", "long"] (or one of them) for assignments
+    types: list[QuestionType] = ["mcq"]
     difficulties: list[int] = [1, 2, 3]
     instructions: str | None = None
 
@@ -406,6 +405,9 @@ class AssessmentConfig(BaseModel):
     kind: Literal["quiz", "assignment"]
     subject: str | None = None  # defaults to the classroom's subject
     count: int = Field(ge=1, le=100)  # questions per set
+    # The chapters it covers: only questions generated from these docs.
+    # Empty = any doc.
+    source_doc_ids: list[UUID] = []
     topics: list[str] = []  # empty = any
     types: list[QuestionType] = []
     difficulties: list[int] = []
@@ -470,10 +472,81 @@ class AssessmentSetOut(BaseModel):
     items: list[AssessmentItemOut]
 
 
+class ResultOut(BaseModel):
+    """One student's marks on an assessment (faculty view)."""
+    student_email: str
+    student_name: str | None
+    score: int | None  # None: hasn't submitted, or an assignment (not marked in the app)
+    total: int | None
+    submitted_at: datetime | None
+    late: bool = False  # submitted after the due date
+    marked_by: str | None = None  # assignment ticked off by this faculty member (None: the student)
+    file_name: str | None = None  # assignment: the PDF they handed in
+    file_size: int | None = None
+    # quizzes: position -> the option they picked, as their set shows it (None = blank)
+    choices: dict[int, int | None] = {}
+
+
 class AssessmentOut(AssessmentSummaryOut):
     sets: list[AssessmentSetOut]
     # Quizzes: students in the classroom now who have no set (joined later).
     missing_students: list[str]
+    # Everyone who has the assessment (quiz: a set; assignment: the
+    # classroom's students), submitted or not, plus anyone who submitted
+    # and has since left.
+    results: list[ResultOut]
+
+
+class AssessmentStatOut(BaseModel):
+    id: UUID
+    kind: Literal["quiz", "assignment"]
+    title: str
+    due_at: datetime | None
+    created_at: datetime
+    assigned: int  # students who have it
+    submitted: int  # submitted (quiz) or handed in (assignment)
+    late: int
+    average: float | None  # quizzes: mean score, 0..1
+
+
+class StudentStatOut(BaseModel):
+    email: str
+    name: str | None
+    quizzes: int
+    assignments: int
+    handed_in: int  # of quizzes + assignments
+    missed: int  # past due and not handed in
+    late: int
+    average: float | None  # quiz average, 0..1
+
+
+class ChapterStatOut(BaseModel):
+    doc_id: UUID | None  # None: questions written by hand
+    title: str
+    answered: int  # quiz answers to its questions
+    right: int
+    accuracy: float
+
+
+class HardQuestionOut(BaseModel):
+    question_id: UUID
+    prompt: str
+    assessment: str
+    answered: int
+    right: int
+    accuracy: float
+
+
+class ClassroomAnalyticsOut(BaseModel):
+    students: int
+    quizzes: int
+    assignments: int
+    average: float | None  # every quiz submission, 0..1
+    completion: float | None  # share of everything assigned that's been handed in
+    assessments: list[AssessmentStatOut]
+    student_rows: list[StudentStatOut]
+    chapters: list[ChapterStatOut]  # weakest first
+    hardest: list[HardQuestionOut]  # most often wrong, answered by at least two
 
 
 class StudentAssessmentSummaryOut(BaseModel):
@@ -486,15 +559,39 @@ class StudentAssessmentSummaryOut(BaseModel):
     question_count: int
     due_at: datetime | None
     created_at: datetime
+    # Their marks, once submitted.
+    score: int | None = None
+    total: int | None = None
+    submitted_at: datetime | None = None
 
 
 class StudentItemOut(BaseModel):
-    """A question as a student sees it: never the answer."""
+    """A question as a student sees it. The answer only once results are
+    visible (submitted, and the due date has passed if there is one)."""
     position: int
     type: QuestionType
     prompt: str
     options: list[str]
+    choice: int | None = None  # what they picked, as shown
+    # Once submitted: whether their pick was right. Doesn't give away the
+    # answer before results are visible (`correct`).
+    is_right: bool | None = None
+    correct: int | None = None
+    explanation: str | None = None
 
 
 class StudentAssessmentOut(StudentAssessmentSummaryOut):
     items: list[StudentItemOut]
+    closed: bool  # past due without a submission: can't be answered any more
+    results_visible: bool
+    file_name: str | None = None  # assignment: the PDF they handed in (None: none, or a paper copy)
+    file_size: int | None = None
+
+
+class AnswerIn(BaseModel):
+    position: int
+    choice: int | None  # index into the options as shown; None = left blank
+
+
+class SubmitAnswersRequest(BaseModel):
+    answers: list[AnswerIn]

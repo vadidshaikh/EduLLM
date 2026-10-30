@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ApiError, listQuestions, setQuestionsStatus } from "../api/client";
+import { ApiError, listNoteSources, listQuestions, setQuestionsStatus } from "../api/client";
 import Icon from "../ui/Icons";
 import GenerateQuestionsDialog from "./GenerateQuestionsDialog";
 import QuestionDialog from "./QuestionDialog";
 import { DIFFICULTY_LABEL, TYPE_LABEL } from "./labels";
+import Loading from "../ui/Loading";
 
 /**
  * A workspace's question bank: drafts from the model (or written by hand)
@@ -19,6 +20,7 @@ export default function QuestionBank({ token, workspace }) {
   const [selected, setSelected] = useState([]);
   const [editing, setEditing] = useState(null); // a question, or {} for a new one
   const [generating, setGenerating] = useState(false);
+  const [docTitles, setDocTitles] = useState({});
 
   const refresh = useCallback(async () => {
     try {
@@ -33,6 +35,17 @@ export default function QuestionBank({ token, workspace }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount
     refresh();
   }, [refresh]);
+
+  // Titles for the "Chapter" column (the doc each question was written from).
+  useEffect(() => {
+    let cancelled = false;
+    listNoteSources(token, workspace.id)
+      .then((rows) => !cancelled && setDocTitles(Object.fromEntries(rows.map((d) => [d.id, d.title]))))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [token, workspace.id]);
 
   const subjects = useMemo(() => {
     const byKey = new Map();
@@ -113,7 +126,7 @@ export default function QuestionBank({ token, workspace }) {
       {error && <p className="form-error lib-note">{error}</p>}
 
       {questions === null && !error ? (
-        <p className="desk-empty">Loading questions...</p>
+        <Loading label="Loading questions" />
       ) : questions?.length === 0 ? (
         <div className="table-wrap">
           <div className="empty-state is-compact">
@@ -140,7 +153,7 @@ export default function QuestionBank({ token, workspace }) {
                     />
                   </th>
                   <th>Question</th>
-                  <th>Topic</th>
+                  <th>Chapter</th>
                   <th>Level</th>
                   <th>Status</th>
                 </tr>
@@ -172,7 +185,11 @@ export default function QuestionBank({ token, workspace }) {
                         {!subject && `, ${q.subject}`}
                       </small>
                     </td>
-                    <td className="who">{q.topic}</td>
+                    <td className="who q-chapter">
+                      {q.source_doc_ids.length
+                        ? q.source_doc_ids.map((id) => docTitles[id] ?? "A removed doc").join(", ")
+                        : "Written by hand"}
+                    </td>
                     <td className="who">{DIFFICULTY_LABEL[q.difficulty]}</td>
                     <td>
                       {q.status === "approved" ? (
@@ -208,8 +225,6 @@ export default function QuestionBank({ token, workspace }) {
         <GenerateQuestionsDialog
           token={token}
           workspaceId={workspace.id}
-          subjects={subjects.map(([, s]) => s.name)}
-          defaultSubject={subjectName}
           onClose={() => setGenerating(false)}
           onGenerated={({ questions: added, duplicates }) => {
             setGenerating(false);

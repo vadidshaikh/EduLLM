@@ -12,10 +12,12 @@ Every check here 404s rather than 403s when the caller isn't a member, so
 workspace and classroom ids don't leak to people outside them.
 """
 import logging
+import mimetypes
 import re
+from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from app.api.schemas import (
     AddMemberRequest,
@@ -301,6 +303,27 @@ def list_readable_documents(scope_id: UUID | None = None, claims: dict = Depends
     `scope_id` (empty if they don't hold it). Works for students and faculty.
     """
     return queries.list_readable_documents(email=claims["sub"], role=claims["role"], scope_id=scope_id)
+
+
+@router.get("/documents/{document_id}/file")
+def get_document_file(document_id: UUID, claims: dict = Depends(get_claims)) -> Response:
+    """The original uploaded file, for anyone who can read the document
+    (students through their classrooms, faculty through their workspaces
+    and the institute library). Served inline so PDFs open in the viewer.
+    """
+    document = queries.get_readable_document(document_id, email=claims["sub"], role=claims["role"])
+    if document is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
+    try:
+        with open(document["storage_path"], "rb") as f:
+            data = f.read()
+    except FileNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "the file is missing") from exc
+    name = document["filename"]
+    media_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    ascii_name = name.encode("ascii", "ignore").decode().replace('"', "") or "document"
+    disposition = f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"
+    return Response(data, media_type=media_type, headers={"Content-Disposition": disposition})
 
 
 @router.get("/scopes", response_model=list[ScopeOut])

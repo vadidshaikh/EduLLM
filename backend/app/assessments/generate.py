@@ -8,6 +8,7 @@ uniqueness rules for quizzes and assignments mean nothing if two "different"
 questions are paraphrases.
 """
 import logging
+import math
 from uuid import UUID
 
 import numpy as np
@@ -27,6 +28,9 @@ _CONTEXT_CHUNKS = 12
 _MIN_CHUNKS_PER_SOURCE = 2
 _MAX_OPTIONS = 6
 _EXISTING_SHOWN = 40  # bank questions listed in the prompt so the model avoids them
+_BATCH = 15  # questions per model call; a longer reply would get cut off
+_MIN_BATCH_CHUNKS = 4  # excerpts below which batches share them instead of splitting
+_LABEL_MAX = 60  # characters kept of a model-written subject or topic
 
 TYPE_LABELS = {"mcq": "multiple choice", "short": "short answer", "long": "long answer"}
 
@@ -68,9 +72,9 @@ def clean_question(raw: object, *, types: list[str]) -> dict | None:
     return {"type": qtype, "difficulty": difficulty, "body": body, "answer": answer}
 
 
-def _excerpts(claims: dict, query: str, sources: list[dict]) -> list[dict]:
+def _excerpts(claims: dict, query: str, sources: list[dict], total: int = _CONTEXT_CHUNKS) -> list[dict]:
     doc_ids = [UUID(s["doc_id"]) for s in sources]
-    per_document = max(_MIN_CHUNKS_PER_SOURCE, _CONTEXT_CHUNKS // max(len(doc_ids), 1))
+    per_document = max(_MIN_CHUNKS_PER_SOURCE, total // max(len(doc_ids), 1))
     chunks = queries.search_source_chunks(
         email=claims["sub"],
         role=claims["role"],
@@ -92,37 +96,46 @@ def _mix(count: int, types: list[str], difficulties: list[int]) -> str:
     )
 
 
-@traceable(name="draft_questions", run_type="chain", tags=["assessments"])
-def draft_questions(
-    claims: dict,
-    *,
-    workspace_id: UUID,
-    subject: str,
-    topic: str,
-    sources: list[dict],
-    count: int,
-    types: list[str],
-    difficulties: list[int],
-    instructions: str | None,
-) -> tuple[list[dict], int]:
-    """New questions on `topic`, each {type, difficulty, body, answer,
-    source_chunk_ids, source_doc_ids, embedding}, minus near-duplicates.
-    Returns them and how many duplicates were dropped.
+def _label(value: object) -> str:
+    return " ".join(str(value or "").split())[:_LABEL_MAX]
+
+
+def _subject_brief(subjects: list[str]) -> str:
+    if subjects:
+        return (
+            "Subjects taught in this workspace: " + "; ".join(subjects) + ". Set each question's "
+            '"subject" to the one it belongs to, spelled exactly as listed.'
+        )
+    return 'No subjects yet: set "subject" to the course name the excerpts are from, the same for every question.'
+
+
+def _subject_for(item: dict, subjects: list[str], fallback: str) -> str:
+    """The question's subject: one of the workspace's (whatever case the
+    model used), or with none yet, the model's own, the same for the batch.
     """
-    chunks = _excerpts(claims, f"{subject}: {topic}", sources)
-    titles = {s["doc_id"]: s["title"] for s in sources}
+    wanted = _label(item.get("subject"))
+    if not subjects:
+        return fallback or wanted or "General"
+    return next((s for s in subjects if s.lower() == wanted.lower()), subjects[0])
+
+
+def _draft_batch(
+    *, chunks: list[dict], titles: dict, brief: list[str], written: list[str], count: int,
+    types: list[str], difficulties: list[int], subjects: list[str], batch_subject: str,
+) -> list[dict]:
+    """One model call writing up to `count` questions from `chunks`.
+    `written` are prompts already in the bank or written earlier in this
+    request, which it's told not to repeat.
+    """
     context = "\n\n=====\n\n".join(
         f"[{n}] from {titles.get(str(c['document_id']), 'a source')}\n\n{c['chunk_text']}"
         for n, c in enumerate(chunks, start=1)
     )
-    existing = queries.list_question_prompts(workspace_id, subject, limit=_EXISTING_SHOWN)
-    brief = [f"Subject: {subject}", f"Topic: {topic}", _mix(count, types, difficulties)]
-    if instructions:
-        brief.append(f"Faculty's instructions: {instructions}")
-    if existing:
-        brief.append("Already in the bank (do not repeat):\n" + "\n".join(f"- {p}" for p in existing))
+    lines = [*brief, _mix(count, types, difficulties)]
+    if written:
+        lines.append("Already in the bank (do not repeat):\n" + "\n".join(f"- {p}" for p in written))
 
-    raw = ask(QUESTIONS_PROMPT, "\n".join(brief) + f"\n\nExcerpts:\n\n{context}", 0.4)
+    raw = ask(QUESTIONS_PROMPT, "\n".join(lines) + f"\n\nExcerpts:\n\n{context}", 0.4)
     parsed = parse_json(raw)
     items = parsed.get("questions") if isinstance(parsed, dict) else parsed
     drafts = []
@@ -130,6 +143,9 @@ def draft_questions(
         question = clean_question(item, types=types)
         if question is None:
             continue
+        question["subject"] = _subject_for(item, subjects, batch_subject)
+        batch_subject = batch_subject or question["subject"]
+        question["topic"] = _label(item.get("topic")) or "General"
         cited = [n for n in item.get("excerpts") or [] if isinstance(n, int) and 1 <= n <= len(chunks)]
         used = [chunks[n - 1] for n in dict.fromkeys(cited)]
         question["source_chunk_ids"] = [c["id"] for c in used]
@@ -137,6 +153,61 @@ def draft_questions(
         drafts.append(question)
     if not drafts:
         logger.warning("draft_questions: unusable reply from the model: %.300s", raw)
+    return drafts[:count]
+
+
+@traceable(name="draft_questions", run_type="chain", tags=["assessments"])
+def draft_questions(
+    claims: dict,
+    *,
+    workspace_id: UUID,
+    sources: list[dict],
+    count: int,
+    types: list[str],
+    difficulties: list[int],
+    instructions: str | None,
+) -> tuple[list[dict], int]:
+    """New questions from the sources, each {subject, topic, type,
+    difficulty, body, answer, source_chunk_ids, source_doc_ids, embedding},
+    minus near-duplicates. The model labels each question's topic and picks
+    its subject from the workspace's. Returns them and how many duplicates
+    were dropped.
+
+    More than _BATCH questions are written in several calls (one reply can
+    only be so long), each from its own share of the excerpts and told what
+    the earlier ones wrote.
+    """
+    titles = {s["doc_id"]: s["title"] for s in sources}
+    batches = math.ceil(count / _BATCH)
+    # No topic to search for: the doc titles (and any guidance) pick the excerpts.
+    query = "\n".join([*titles.values(), instructions or ""]).strip()
+    chunks = _excerpts(claims, query, sources, total=_CONTEXT_CHUNKS * batches)
+    subjects = queries.workspace_subjects(workspace_id)
+    written = queries.list_question_prompts(workspace_id, limit=_EXISTING_SHOWN)
+    brief = [_subject_brief(subjects)]
+    if instructions:
+        brief.append(f"Faculty's instructions: {instructions}")
+
+    drafts: list[dict] = []
+    for b in range(batches):
+        # Every batch gets a different slice, across all the docs, unless
+        # there are too few excerpts to split.
+        share = chunks[b::batches] if len(chunks) >= batches * _MIN_BATCH_CHUNKS else chunks
+        try:
+            batch = _draft_batch(
+                chunks=share, titles=titles, brief=brief, written=written,
+                count=min(_BATCH, count - len(drafts)), types=types, difficulties=difficulties,
+                subjects=subjects, batch_subject=drafts[0]["subject"] if drafts else "",
+            )
+        except GenerationError:
+            if not drafts:
+                raise
+            break  # keep what the earlier batches wrote
+        drafts.extend(batch)
+        written = [*written, *(q["body"]["prompt"] for q in batch)]
+        if len(drafts) >= count:
+            break
+    if not drafts:
         raise GenerationError("the model didn't return usable questions; try again")
 
     drafts = drafts[:count]

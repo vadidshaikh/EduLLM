@@ -452,12 +452,23 @@ def list_readable_documents(*, email: str, role: str, scope_id: UUID | None = No
             return []
         return conn.execute(
             """
-            SELECT id, title FROM documents
+            SELECT id, title, filename FROM documents
             WHERE scope_ids && %s::uuid[] AND status = 'indexed'
             ORDER BY lower(title)
             """,
             (scopes,),
         ).fetchall()
+
+
+def get_readable_document(document_id: UUID, *, email: str, role: str) -> dict[str, Any] | None:
+    """The document if the user can read it (the same scope rule as the
+    shelf and the chat), otherwise None.
+    """
+    with pool.connection() as conn:
+        scopes = _user_scope_ids(conn, email, role)
+        return conn.execute(
+            "SELECT * FROM documents WHERE id = %s AND scope_ids && %s::uuid[]", (document_id, scopes)
+        ).fetchone()
 
 
 def search_chunks(
@@ -1300,7 +1311,7 @@ def _with_source_status(conn: Any, notes: list[dict[str, Any]]) -> list[dict[str
 
 
 def list_notes(workspace_id: UUID) -> list[dict[str, Any]]:
-    """A workspace's notes and decks, most recently edited first. The body
+    """A workspace's slide decks, most recently edited first. The body
     and slides are left out; `get_note` has them.
     """
     with pool.connection() as conn:
@@ -1308,7 +1319,7 @@ def list_notes(workspace_id: UUID) -> list[dict[str, Any]]:
             f"""
             SELECT {_NOTE_COLUMNS}, jsonb_array_length(n.slides) AS slide_count
             FROM notes n {_NOTE_JOINS}
-            WHERE n.workspace_id = %s
+            WHERE n.workspace_id = %s AND n.kind = 'slides'
             ORDER BY n.updated_at DESC
             """,
             (workspace_id,),
@@ -1322,7 +1333,8 @@ def list_notes(workspace_id: UUID) -> list[dict[str, Any]]:
 def get_note(note_id: UUID) -> dict[str, Any] | None:
     with pool.connection() as conn:
         row = conn.execute(
-            f"SELECT {_NOTE_COLUMNS} FROM notes n {_NOTE_JOINS} WHERE n.id = %s", (note_id,)
+            f"SELECT {_NOTE_COLUMNS} FROM notes n {_NOTE_JOINS} WHERE n.id = %s AND n.kind = 'slides'",
+            (note_id,),
         ).fetchone()
         return _with_source_status(conn, [row])[0] if row else None
 
@@ -1433,18 +1445,41 @@ _QUESTION_COLUMNS = """
 """
 
 
-def list_question_prompts(workspace_id: UUID, subject: str, *, limit: int) -> list[str]:
-    """The prompts of the workspace's most recent questions in a subject."""
+def list_question_prompts(workspace_id: UUID, *, limit: int) -> list[str]:
+    """The prompts of the workspace's most recent questions."""
     with pool.connection() as conn:
         rows = conn.execute(
             """
             SELECT body->>'prompt' AS prompt FROM questions
-            WHERE workspace_id = %s AND lower(subject) = lower(%s)
+            WHERE workspace_id = %s
             ORDER BY created_at DESC LIMIT %s
             """,
-            (workspace_id, subject, limit),
+            (workspace_id, limit),
         ).fetchall()
         return [r["prompt"] for r in rows]
+
+
+def workspace_subjects(workspace_id: UUID) -> list[str]:
+    """The subjects in use in a workspace (its active classrooms' and its
+    question bank's), most used first, one spelling each: the classrooms'
+    when both have it, since quizzes match questions to a classroom's subject.
+    """
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT (array_agg(subject ORDER BY from_classroom DESC))[1] AS subject
+            FROM (
+                SELECT subject, true AS from_classroom FROM classrooms
+                WHERE workspace_id = %(ws)s AND archived_at IS NULL AND subject IS NOT NULL
+                UNION ALL
+                SELECT subject, false FROM questions WHERE workspace_id = %(ws)s
+            ) s
+            GROUP BY lower(subject)
+            ORDER BY count(*) DESC, lower(subject)
+            """,
+            {"ws": workspace_id},
+        ).fetchall()
+        return [r["subject"] for r in rows]
 
 
 def most_similar_question(
@@ -1466,10 +1501,8 @@ def most_similar_question(
         ).fetchone()
 
 
-def insert_questions(
-    *, workspace_id: UUID, subject: str, topic: str, questions: list[dict[str, Any]], actor_email: str
-) -> list[UUID]:
-    """Adds questions to the bank as drafts."""
+def insert_questions(*, workspace_id: UUID, questions: list[dict[str, Any]], actor_email: str) -> list[UUID]:
+    """Adds questions to the bank as drafts. Each carries its own subject and topic."""
     with pool.connection() as conn:
         ids = []
         for q in questions:
@@ -1482,8 +1515,8 @@ def insert_questions(
                 """,
                 (
                     workspace_id,
-                    subject,
-                    topic,
+                    q["subject"],
+                    q["topic"],
                     q["type"],
                     q["difficulty"],
                     Json(q["body"]),
@@ -1582,10 +1615,12 @@ def approved_pool(
     topics: list[str],
     types: list[str],
     difficulties: list[int],
+    doc_ids: list[UUID] | None = None,
     unused_by_assignments: str | None = None,
 ) -> list[dict[str, Any]]:
-    """The workspace's approved questions in a subject, narrowed by topic,
-    type and difficulty (empty list = any). With `unused_by_assignments`
+    """The workspace's approved questions in a subject, narrowed by source
+    doc (written from any of `doc_ids`), topic, type and difficulty (empty
+    list = any). With `unused_by_assignments`
     (a rule key), questions already in an assignment with that key are left
     out.
     """
@@ -1597,6 +1632,7 @@ def approved_pool(
             FROM questions q
             WHERE q.workspace_id = %(ws)s AND q.status = 'approved'
               AND lower(q.subject) = lower(%(subject)s)
+              AND (cardinality(%(docs)s::uuid[]) = 0 OR q.source_doc_ids && %(docs)s::uuid[])
               AND (cardinality(%(topics)s::text[]) = 0 OR lower(q.topic) = ANY(%(topics)s::text[]))
               AND (cardinality(%(types)s::text[]) = 0 OR q.type = ANY(%(types)s::text[]))
               AND (cardinality(%(difficulties)s::int[]) = 0 OR q.difficulty = ANY(%(difficulties)s::int[]))
@@ -1609,6 +1645,7 @@ def approved_pool(
             {
                 "ws": workspace_id,
                 "subject": subject,
+                "docs": list(doc_ids or []),
                 "topics": [t.strip().lower() for t in topics],
                 "types": types,
                 "difficulties": difficulties,
@@ -1744,7 +1781,7 @@ def get_assessment_items(assessment_id: UUID) -> list[dict[str, Any]]:
         return conn.execute(
             """
             SELECT ai.student_email, ai.position, ai.option_order, u.name AS student_name,
-                   q.id AS question_id, q.topic, q.type, q.difficulty, q.body, q.answer
+                   q.id AS question_id, q.topic, q.type, q.difficulty, q.body, q.answer, q.source_doc_ids
             FROM assessment_items ai
             JOIN questions q ON q.id = ai.question_id
             LEFT JOIN users u ON u.email = ai.student_email
@@ -1755,12 +1792,18 @@ def get_assessment_items(assessment_id: UUID) -> list[dict[str, Any]]:
         ).fetchall()
 
 
-def delete_assessment(assessment_id: UUID) -> None:
-    """Deletes an assessment; its questions become free for other
-    assignments again."""
+def delete_assessment(assessment_id: UUID) -> list[str]:
+    """Deletes an assessment with its submissions; its questions become free
+    for other assignments again. Returns the handed-in files' paths, for the
+    caller to remove.
+    """
     with pool.connection() as conn:
+        files = conn.execute(
+            "SELECT file_path FROM submissions WHERE assessment_id = %s AND file_path IS NOT NULL", (assessment_id,)
+        ).fetchall()
         conn.execute("DELETE FROM assessments WHERE id = %s", (assessment_id,))
         conn.commit()
+        return [f["file_path"] for f in files]
 
 
 _STUDENT_CAN_SEE = """
@@ -1780,8 +1823,10 @@ def list_student_assessments(email: str) -> list[dict[str, Any]]:
                    c.id AS classroom_id, c.name AS classroom_name,
                    (SELECT count(*) FROM assessment_items ai
                     WHERE ai.assessment_id = a.id
-                      AND (ai.student_email = %(email)s OR ai.student_email IS NULL)) AS question_count
+                      AND (ai.student_email = %(email)s OR ai.student_email IS NULL)) AS question_count,
+                   s.score, s.total, s.submitted_at
             FROM assessments a {_STUDENT_CAN_SEE}
+            LEFT JOIN submissions s ON s.assessment_id = a.id AND s.student_email = %(email)s
             WHERE a.kind = 'assignment' OR EXISTS (
                 SELECT 1 FROM assessment_items ai WHERE ai.assessment_id = a.id AND ai.student_email = %(email)s
             )
@@ -1791,10 +1836,11 @@ def list_student_assessments(email: str) -> list[dict[str, Any]]:
         ).fetchall()
 
 
-def get_student_assessment(assessment_id: UUID, email: str) -> dict[str, Any] | None:
+def get_student_assessment(assessment_id: UUID, email: str, *, with_answers: bool = False) -> dict[str, Any] | None:
     """One assessment as a student sees it, with their questions in their
-    order (prompt and options only: never the answer), or None if they
-    can't see it.
+    order (prompt and options only), or None if they can't see it. The
+    answers come along only `with_answers`, for grading and for showing
+    results once they're allowed: callers decide what reaches the student.
     """
     with pool.connection() as conn:
         assessment = conn.execute(
@@ -1808,9 +1854,10 @@ def get_student_assessment(assessment_id: UUID, email: str) -> dict[str, Any] | 
         ).fetchone()
         if assessment is None:
             return None
+        answer = ", q.answer" if with_answers else ""
         items = conn.execute(
-            """
-            SELECT ai.position, ai.option_order, q.type, q.body
+            f"""
+            SELECT ai.position, ai.option_order, q.id AS question_id, q.type, q.body{answer}
             FROM assessment_items ai JOIN questions q ON q.id = ai.question_id
             WHERE ai.assessment_id = %s AND (ai.student_email = %s OR ai.student_email IS NULL)
             ORDER BY ai.position
@@ -1821,3 +1868,90 @@ def get_student_assessment(assessment_id: UUID, email: str) -> dict[str, Any] | 
             return None
         assessment["items"] = items
         return assessment
+
+
+# --- Submissions (Phase 5) ---
+#
+# Graded by the API on submit; stored once per student and assessment.
+
+
+def get_submission(assessment_id: UUID, email: str) -> dict[str, Any] | None:
+    with pool.connection() as conn:
+        return conn.execute(
+            "SELECT * FROM submissions WHERE assessment_id = %s AND student_email = %s", (assessment_id, email)
+        ).fetchone()
+
+
+def insert_submission(
+    *, assessment_id: UUID, email: str, answers: list[dict], score: int | None, total: int | None,
+    marked_by: str | None = None,
+) -> bool:
+    """Saves a submission: a graded quiz, or an assignment handed in (no
+    answers or score; `marked_by` = the faculty member who ticked it off).
+    False if the student already submitted.
+    """
+    try:
+        with pool.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO submissions (assessment_id, student_email, answers, score, total, marked_by)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (assessment_id, email, Json(answers), score, total, marked_by),
+            )
+            conn.commit()
+        return True
+    except UniqueViolation:
+        return False
+
+
+def list_submissions(assessment_id: UUID) -> list[dict[str, Any]]:
+    """Every submission to an assessment, with the student's name."""
+    with pool.connection() as conn:
+        return conn.execute(
+            """
+            SELECT s.*, u.name AS student_name
+            FROM submissions s LEFT JOIN users u ON u.email = s.student_email
+            WHERE s.assessment_id = %s
+            """,
+            (assessment_id,),
+        ).fetchall()
+
+
+def delete_submission(assessment_id: UUID, email: str) -> dict[str, Any] | None:
+    """Undoes a hand-in. Returns the deleted row (its file is the caller's
+    to remove), or None if there was none.
+    """
+    with pool.connection() as conn:
+        row = conn.execute(
+            "DELETE FROM submissions WHERE assessment_id = %s AND student_email = %s RETURNING *",
+            (assessment_id, email),
+        ).fetchone()
+        conn.commit()
+        return row
+
+
+def save_file_submission(
+    *, assessment_id: UUID, email: str, file_path: str, file_name: str, file_size: int
+) -> str | None:
+    """Records an assignment's PDF as handed in now, replacing an earlier
+    hand-in (file or faculty tick-off). Returns the replaced file's path,
+    for the caller to remove.
+    """
+    with pool.connection() as conn:
+        old = conn.execute(
+            "SELECT file_path FROM submissions WHERE assessment_id = %s AND student_email = %s FOR UPDATE",
+            (assessment_id, email),
+        ).fetchone()
+        conn.execute(
+            """
+            INSERT INTO submissions (assessment_id, student_email, answers, file_path, file_name, file_size)
+            VALUES (%s, %s, '[]', %s, %s, %s)
+            ON CONFLICT (assessment_id, student_email) DO UPDATE
+            SET file_path = EXCLUDED.file_path, file_name = EXCLUDED.file_name, file_size = EXCLUDED.file_size,
+                submitted_at = now(), marked_by = NULL
+            """,
+            (assessment_id, email, file_path, file_name, file_size),
+        )
+        conn.commit()
+        return old["file_path"] if old else None

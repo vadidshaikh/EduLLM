@@ -97,12 +97,13 @@ Upload → save file → `documents` row (status `queued`) → background job: *
 - Uploading a title that already exists in the same workspace (or the institute library) updates that row in place,
   bumps `version` and replaces its chunks. Version isn't shown in the UI.
 
-## Notes and slide decks (Phase 3)
+## Slide decks (Phase 3)
 
 `app/api/notes.py`, `app/authoring/` (`prompts.py`, `generate.py`, `render.py`).
 
-- A note belongs to a workspace (`notes` table); any of its faculty can edit it. `kind` is `notes` (Markdown in `body_md`) or
-  `slides` (`slides`: `[{title, bullets, notes}]`).
+- A deck belongs to a workspace (`notes` table, a historical name); any of its faculty can edit it. Only `kind = 'slides'`
+  is created, listed or opened (`slides`: `[{title, bullets, notes}]`); older Markdown notes rows (`kind = 'notes'`,
+  `body_md`) are ignored.
 - **Sources** are some of the workspace's documents and the institute library's (indexed, up to 8), stored as
   `sources = [{doc_id, title, version}]`; `[n]` in the text cites the n-th.
 - **Drafting** (`generate.py`) embeds the topic and takes the closest chunks *of each source*
@@ -111,11 +112,10 @@ Upload → save file → `documents` row (status `queued`) → background job: *
   Drafts are streamed from the LLM and collected (a blocking call over a minute hits the client's read timeout), with up to
   8192 output tokens. If every key fails, the API returns 502 instead of saving the fallback sentence.
 - **Stale**: `queries._with_source_status` compares each source's stored version with the document's current one (or notes it
-  was removed). `POST /notes/{id}/redraft` returns a proposal only (whole note/deck, or one `## ` section sent by the editor);
+  was removed). `POST /notes/{id}/redraft` returns a proposal only (the whole deck);
   the editor shows a line diff and nothing is saved until Save. `mark_up_to_date` records the current versions.
 - **Saving** is optimistic: `PATCH` carries the `updated_at` the editor loaded and gets 409 if someone saved since.
-- **Publishing** uploads the note through the normal path (`insert_document` + `run_ingestion`): notes as Markdown with a
-  Sources list appended, decks as `.pptx` (`render.deck_pptx`: title slide, slides with speaker notes, sources slide; built-in
+- **Publishing** uploads the deck through the normal path (`insert_document` + `run_ingestion`) as a `.pptx` (`render.deck_pptx`: title slide, slides with speaker notes, sources slide; built-in
   design, or the template at `PPT_TEMPLATE_PATH`). `notes.document_id` links them; republishing replaces that document by id
   (`insert_document(document_id=...)`), bumping its version and notifying its readers. A note can't be published under the
   title of another document in the workspace (409), since uploads with an existing title replace it.
@@ -208,7 +208,7 @@ frontend/src/
              ScopeSwitcher (shelf switcher; join a classroom / new workspace), Notices (bell)
   chat/      ChatPage (Ask: shelf, thread, desk, composer), History, AnswerBlock, ChartBlock
   library/   LibraryPage (shelves/list, needs attention, recent changes, tabs), DocumentDrawer,
-             ClassroomsPanel, MembersPanel, NotesPanel (Notes & slides tab), NewNoteDialog,
+             ClassroomsPanel, MembersPanel, NotesPanel (Slides tab), NewNoteDialog,
              NoteEditor (editor, redraft + compare, publish), noteState.js, SourcePicker
   quizzes/   QuizzesPanel (workspace "Quizzes" tab), QuestionBank, QuestionDialog, GenerateQuestionsDialog,
              AssessmentsPanel, NewAssessmentDialog, AssessmentView, ItemList, MyAssessmentsPage (student "Quizzes")
@@ -235,6 +235,6 @@ frontend/src/
   (`GET /documents` for students, the library listing for faculty). The desk on the right lists every doc the conversation used; hovering or clicking an answer highlights
   the docs that answer used (default: the latest answer). On narrow screens the desk is a strip above the thread.
 - Library (faculty): shelves grouped by who can read them, each with an upload slot that sets that access;
-  list view; a drawer per book (rename, access/publish, history, remove); a "Notes & slides" tab for every
+  list view; a drawer per book (rename, access/publish, history, remove); a "Slides" tab for every
   workspace; classrooms and faculty tabs for shared workspaces.
 - Fonts: Outfit (UI), Literata (answers), JetBrains Mono (join codes). Light and dark themes.

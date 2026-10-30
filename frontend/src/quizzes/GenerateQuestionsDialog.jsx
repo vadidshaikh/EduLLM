@@ -2,20 +2,26 @@ import { useEffect, useState } from "react";
 import { ApiError, generateQuestions, listNoteSources } from "../api/client";
 import SourcePicker from "../library/SourcePicker";
 import Icon from "../ui/Icons";
-import { DIFFICULTY_LABEL, TYPE_LABEL, TYPES, toggled } from "./labels";
+import { DIFFICULTY_LABEL, WRITTEN, toggled } from "./labels";
 
 const MAX_SOURCES = 8;
+const MIN_COUNT = 10;
+const MAX_COUNT = 50;
+
+function clampCount(value) {
+  return Math.max(MIN_COUNT, Math.min(MAX_COUNT, Math.round(Number(value)) || MIN_COUNT));
+}
 
 /**
- * Has the model draft questions on a topic from chosen docs. They land in
- * the bank as drafts to review; ones too close to existing questions are
- * left out. `onGenerated({questions, duplicates})`.
+ * Has the model draft questions from chosen docs of this workspace: multiple
+ * choice (for quizzes) or written short and long answers (for assignments). It
+ * labels each one's topic and picks its subject from the workspace's. They
+ * land in the bank as drafts to review; ones too close to existing questions
+ * are left out. `onGenerated({questions, duplicates})`.
  */
-export default function GenerateQuestionsDialog({ token, workspaceId, subjects, defaultSubject, onClose, onGenerated }) {
-  const [subject, setSubject] = useState(defaultSubject);
-  const [topic, setTopic] = useState("");
+export default function GenerateQuestionsDialog({ token, workspaceId, onClose, onGenerated }) {
+  const [written, setWritten] = useState(false); // false: multiple choice
   const [count, setCount] = useState(10);
-  const [types, setTypes] = useState(["mcq", "short"]);
   const [difficulties, setDifficulties] = useState([1, 2, 3]);
   const [instructions, setInstructions] = useState("");
   const [docs, setDocs] = useState(null);
@@ -26,7 +32,7 @@ export default function GenerateQuestionsDialog({ token, workspaceId, subjects, 
   useEffect(() => {
     let cancelled = false;
     listNoteSources(token, workspaceId)
-      .then((rows) => !cancelled && setDocs(rows))
+      .then((rows) => !cancelled && setDocs(rows.filter((d) => d.workspace_id === workspaceId)))
       .catch(() => !cancelled && setDocs([]));
     return () => {
       cancelled = true;
@@ -41,21 +47,21 @@ export default function GenerateQuestionsDialog({ token, workspaceId, subjects, 
     return () => document.removeEventListener("keydown", onKey);
   }, [busy, onClose]);
 
-  const ready = subject.trim() && topic.trim() && picked.length && types.length && difficulties.length;
+  const ready = picked.length && difficulties.length;
 
   async function submit(e) {
     e.preventDefault();
     if (!ready || busy) return;
+    const howMany = clampCount(count);
+    setCount(howMany);
     setBusy(true);
     setError("");
     try {
       onGenerated(
         await generateQuestions(token, workspaceId, {
-          subject: subject.trim(),
-          topic: topic.trim(),
           sourceDocIds: picked,
-          count,
-          types,
+          count: howMany,
+          types: written ? WRITTEN : ["mcq"],
           difficulties,
           instructions: instructions.trim() || null,
         })
@@ -77,51 +83,16 @@ export default function GenerateQuestionsDialog({ token, workspaceId, subjects, 
           </button>
         </div>
         <form className="modal-body" onSubmit={submit}>
-          <div className="row">
-            <div style={{ flex: 1 }}>
-              <label className="field-label" htmlFor="gen-subject">
-                Subject <span className="optional">quizzes are made per subject</span>
-              </label>
-              <input
-                id="gen-subject"
-                className="input"
-                list="gen-subjects"
-                placeholder="e.g. Compiler Design"
-                value={subject}
-                onChange={(e) => setSubject(e.target.value)}
-              />
-              <datalist id="gen-subjects">
-                {subjects.map((s) => (
-                  <option key={s} value={s} />
-                ))}
-              </datalist>
-            </div>
-            <div style={{ flex: 2 }}>
-              <label className="field-label" htmlFor="gen-topic">
-                Topic
-              </label>
-              <input
-                id="gen-topic"
-                className="input"
-                autoFocus
-                placeholder="e.g. Lexical analysis"
-                value={topic}
-                onChange={(e) => setTopic(e.target.value)}
-              />
-            </div>
+          <div className="seg" role="group" aria-label="Question style">
+            <button type="button" aria-pressed={!written} disabled={busy} onClick={() => setWritten(false)}>
+              Multiple choice, for quizzes
+            </button>
+            <button type="button" aria-pressed={written} disabled={busy} onClick={() => setWritten(true)}>
+              Written (short and long), for assignments
+            </button>
           </div>
 
           <div className="row q-kind">
-            <div>
-              <span className="field-label">Types</span>
-              <div className="seg" role="group" aria-label="Types">
-                {TYPES.map((t) => (
-                  <button key={t} type="button" aria-pressed={types.includes(t)} disabled={busy} onClick={() => setTypes(toggled(types, t))}>
-                    {TYPE_LABEL[t]}
-                  </button>
-                ))}
-              </div>
-            </div>
             <div>
               <span className="field-label">Difficulty</span>
               <div className="seg" role="group" aria-label="Difficulty">
@@ -146,10 +117,11 @@ export default function GenerateQuestionsDialog({ token, workspaceId, subjects, 
                 id="gen-count"
                 className="input q-count"
                 type="number"
-                min={1}
-                max={15}
+                min={MIN_COUNT}
+                max={MAX_COUNT}
                 value={count}
-                onChange={(e) => setCount(Math.max(1, Math.min(15, Number(e.target.value) || 1)))}
+                onChange={(e) => setCount(e.target.value)}
+                onBlur={() => setCount(clampCount(count))}
               />
             </div>
           </div>
@@ -158,7 +130,14 @@ export default function GenerateQuestionsDialog({ token, workspaceId, subjects, 
             <legend className="field-label">
               Write them from <span className="optional">up to {MAX_SOURCES} docs</span>
             </legend>
-            <SourcePicker docs={docs} picked={picked} onChange={setPicked} max={MAX_SOURCES} disabled={busy} />
+            <SourcePicker
+              docs={docs}
+              picked={picked}
+              onChange={setPicked}
+              max={MAX_SOURCES}
+              disabled={busy}
+              empty="This workspace has no ready docs yet. Upload some in the Docs tab first."
+            />
           </fieldset>
 
           <div>
@@ -177,7 +156,9 @@ export default function GenerateQuestionsDialog({ token, workspaceId, subjects, 
 
           {busy && (
             <p className="note-box">
-              <b>Writing {count} questions...</b> This usually takes a minute or two. Keep this open.
+              <b>Writing {count} questions...</b>{" "}
+              {count > 15 ? "They're written 15 at a time, so this can take several minutes." : "This usually takes a minute or two."}{" "}
+              Keep this open.
             </p>
           )}
           {error && <p className="form-error">{error}</p>}

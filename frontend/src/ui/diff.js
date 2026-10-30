@@ -45,14 +45,3 @@ export function slidesText(slides) {
       .join("\n"))
     .join("\n\n");
 }
-
-/**
- * Splits notes into the text before the first "## " heading and one string
- * per "## " section (heading included), so a section can be redrafted and
- * put back. Joining `[intro, ...sections]` gives the original text back.
- */
-export function splitSections(markdown) {
-  const parts = markdown.split(/^(?=## )/m);
-  if (parts[0].startsWith("## ")) return { intro: "", sections: parts };
-  return { intro: parts[0], sections: parts.slice(1) };
-}

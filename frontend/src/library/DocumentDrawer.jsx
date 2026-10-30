@@ -9,6 +9,9 @@ import {
 import Icon from "../ui/Icons";
 import { Spine } from "../ui/Shelf";
 import { spineStatus } from "../ui/spines";
+import { confirmDialog } from "../ui/confirm";
+import { useDocViewer } from "../ui/useDocViewer";
+import Loading from "../ui/Loading";
 
 const ACTION_TEXT = { uploaded: "Added", updated: "Updated", deleted: "Removed" };
 
@@ -28,6 +31,8 @@ export default function DocumentDrawer({ token, doc, place, onClose, onChanged, 
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const status = spineStatus(doc);
+  const docViewer = useDocViewer(token);
+  const viewerOpen = docViewer.isOpen;
 
   useEffect(() => {
     let cancelled = false;
@@ -41,11 +46,11 @@ export default function DocumentDrawer({ token, doc, place, onClose, onChanged, 
 
   useEffect(() => {
     function onKey(e) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && !viewerOpen) onClose(); // Escape closes the viewer first
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, viewerOpen]);
 
   /**
    * Runs one change and refreshes the library, showing the error if it fails.
@@ -83,7 +88,13 @@ export default function DocumentDrawer({ token, doc, place, onClose, onChanged, 
   }
 
   async function remove() {
-    if (!window.confirm(`Remove "${doc.title}"? This can't be undone.`)) return;
+    const ok = await confirmDialog({
+      title: `Remove "${doc.title}"?`,
+      message: "It disappears from answers straight away, and readers get a notice. This can't be undone.",
+      confirmLabel: "Remove",
+      danger: true,
+    });
+    if (!ok) return;
     setSaving(true);
     try {
       await deleteDocument(token, doc.id);
@@ -105,6 +116,9 @@ export default function DocumentDrawer({ token, doc, place, onClose, onChanged, 
             <p className="meta">
               In {place.name}, version {doc.version}
             </p>
+            <button className="btn btn-ghost btn-sm drawer-open" onClick={() => docViewer.open(doc)}>
+              <Icon name="download" /> Open {doc.filename?.split(".").pop()?.toUpperCase() || "file"}
+            </button>
             {status === "failed" && (
               <p className="meta" style={{ color: "var(--danger)" }}>
                 Indexing failed: no readable text was found. Upload a text-based copy.
@@ -121,7 +135,7 @@ export default function DocumentDrawer({ token, doc, place, onClose, onChanged, 
           </button>
         </div>
         <div className="drawer-body">
-          {error && <p className="form-error">{error}</p>}
+          {(error || docViewer.error) && <p className="form-error">{error || docViewer.error}</p>}
           <div>
             <h3>
               <label htmlFor="rename">Title shown in answers</label>
@@ -152,7 +166,7 @@ export default function DocumentDrawer({ token, doc, place, onClose, onChanged, 
           <div>
             <h3>History</h3>
             {events === null ? (
-              <p className="form-note">Loading...</p>
+              <Loading label="Loading history" compact />
             ) : events.length === 0 ? (
               <p className="form-note">No recorded changes yet.</p>
             ) : (
@@ -180,6 +194,7 @@ export default function DocumentDrawer({ token, doc, place, onClose, onChanged, 
           </div>
         </div>
       </aside>
+      {docViewer.viewer}
     </>
   );
 }

@@ -33,6 +33,17 @@ def save_upload_file(file_bytes: bytes, original_filename: str) -> Path:
     return dest
 
 
+def save_handin_file(file_bytes: bytes) -> Path:
+    """Saves a student's assignment PDF under storage/handins, apart from
+    library documents (it's never ingested or searchable).
+    """
+    folder = storage_dir() / "handins"
+    folder.mkdir(exist_ok=True)
+    dest = folder / f"{uuid.uuid4()}.pdf"
+    dest.write_bytes(file_bytes)
+    return dest
+
+
 def delete_stored_file(path: str) -> None:
     """Removes an uploaded file, but only if it lives inside the storage
     folder — a documents row pointing anywhere else (e.g. an original under

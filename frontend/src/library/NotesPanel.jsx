@@ -6,29 +6,36 @@ import { smoothly } from "../ui/transition";
 import NewNoteDialog from "./NewNoteDialog";
 import NoteEditor from "./NoteEditor";
 import { publishState } from "./noteState";
+import Loading from "../ui/Loading";
 
 function isPublishing(note) {
   return note.document_id && ["queued", "processing"].includes(note.document_status);
 }
 
 /**
- * A workspace's notes and slide decks: the list, the "new" dialog, and the
+ * A workspace's slide decks: the list, the "new" dialog, and the
  * editor for the one that's open. `onDocsChanged` refreshes the Docs tab
- * after a publish (a published note is a document there).
+ * after a publish (a published deck is a document there). `focus` ({deck},
+ * from a link) opens that deck.
  */
-export default function NotesPanel({ token, workspace, classrooms, onDocsChanged }) {
+export default function NotesPanel({ token, workspace, classrooms, onDocsChanged, focus }) {
   const [notes, setNotes] = useState(null);
   const [error, setError] = useState("");
   const [openId, setOpenIdNow] = useState(null);
   const setOpenId = (id) => smoothly(() => setOpenIdNow(id)); // list <-> editor
-  const [creating, setCreating] = useState(null); // "notes" | "slides"
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- opening what a link points at
+    if (focus) setOpenIdNow(focus.deck);
+  }, [focus]);
 
   const refresh = useCallback(async () => {
     try {
       setNotes(await listNotes(token, workspace.id));
       setError("");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't load the notes.");
+      setError(err instanceof ApiError ? err.message : "Couldn't load the decks.");
     }
   }, [token, workspace.id]);
 
@@ -37,7 +44,7 @@ export default function NotesPanel({ token, workspace, classrooms, onDocsChanged
     if (!openId) refresh();
   }, [refresh, openId]);
 
-  // Published notes being indexed: poll so their status settles on its own.
+  // Published decks being indexed: poll so their status settles on its own.
   useEffect(() => {
     if (openId || !notes?.some(isPublishing)) return undefined;
     const id = setInterval(refresh, 2500);
@@ -62,26 +69,23 @@ export default function NotesPanel({ token, workspace, classrooms, onDocsChanged
     <>
       <div className="lib-tools">
         <p className="panel-hint notes-hint">
-          Write lecture notes or a slide deck from this workspace&apos;s docs and the institute library. The model drafts
+          Build a lecture slide deck from this workspace&apos;s docs and the institute library. The model drafts
           it with citations, you edit it, then publish it as a doc your classrooms can ask about.
         </p>
         <div className="list-upload">
-          <button className="btn btn-ghost" onClick={() => setCreating("slides")}>
-            <Icon name="slides" /> New slide deck
-          </button>
-          <button className="btn" onClick={() => setCreating("notes")}>
-            <Icon name="note" /> New notes
+          <button className="btn" onClick={() => setCreating(true)}>
+            <Icon name="plus" /> New slide deck
           </button>
         </div>
       </div>
       {error && <p className="form-error lib-note">{error}</p>}
 
       {notes === null && !error ? (
-        <p className="desk-empty">Loading notes...</p>
+        <Loading label="Loading decks" />
       ) : notes?.length === 0 ? (
         <div className="table-wrap">
           <div className="empty-state is-compact">
-            <h3>No notes or decks yet</h3>
+            <h3>No slide decks yet</h3>
             <p>Pick a topic and the docs to write from; you&apos;ll get a draft to edit in about a minute.</p>
           </div>
         </div>
@@ -105,13 +109,13 @@ export default function NotesPanel({ token, workspace, classrooms, onDocsChanged
                     <tr key={n.id} tabIndex={0} onClick={() => setOpenId(n.id)} onKeyDown={(e) => e.key === "Enter" && setOpenId(n.id)}>
                       <td>
                         <span className="t-title">
-                          <span className={`note-kind is-${n.kind}`} title={n.kind === "slides" ? "Slide deck" : "Notes"}>
-                            <Icon name={n.kind === "slides" ? "slides" : "note"} />
+                          <span className="note-kind is-slides" title="Slide deck">
+                            <Icon name="slides" />
                           </span>
                           <span>
                             {n.title}
                             <small className="note-sub">
-                              {n.kind === "slides" ? `${n.slide_count} slides` : "Notes"}
+                              {n.slide_count} slide{n.slide_count === 1 ? "" : "s"}
                               {n.subject ? `, ${n.subject}` : ""}
                             </small>
                           </span>
@@ -147,10 +151,9 @@ export default function NotesPanel({ token, workspace, classrooms, onDocsChanged
         <NewNoteDialog
           token={token}
           workspaceId={workspace.id}
-          initialKind={creating}
-          onClose={() => setCreating(null)}
+          onClose={() => setCreating(false)}
           onCreated={(note) => {
-            setCreating(null);
+            setCreating(false);
             setOpenId(note.id);
           }}
         />

@@ -12,20 +12,29 @@ An assessment belongs to a classroom of that workspace:
   difficulties, no two identical (and, optionally, sharing at most
   `max_overlap` questions).
 Which questions go where is plain Python (`app.assessments.assign`) with a
-stored seed. Students see their own questions, never the answers.
+stored seed.
+
+Quizzes are multiple choice: students answer in the app, submit once and
+are graded on submit; they see the answers once the due date (if any) has
+passed. Assignments are written (short and long answer, up to 25): each
+student hands in a PDF of their answers (replaceable; late allowed), which
+faculty open from here and check. Faculty can also tick off a paper copy.
+Nothing about an assignment is marked in the app.
 
 Like workspaces.py, every check 404s for non-members.
 """
 import secrets
+from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 
 from app.api.schemas import (
     AssessmentCheckOut,
     AssessmentConfig,
     AssessmentOut,
     AssessmentSummaryOut,
+    ClassroomAnalyticsOut,
     CreateAssessmentRequest,
     CreateQuestionRequest,
     GenerateQuestionsRequest,
@@ -36,6 +45,7 @@ from app.api.schemas import (
     SetQuestionsStatusResponse,
     StudentAssessmentOut,
     StudentAssessmentSummaryOut,
+    SubmitAnswersRequest,
     UpdateQuestionRequest,
 )
 from app.api.workspaces import managed_classroom, member_workspace, require_student
@@ -45,11 +55,16 @@ from app.auth.dependencies import require_faculty
 from app.authoring.generate import GenerationError
 from app.db import queries
 from app.ingestion.embedder import embed_texts
+from app.storage import delete_stored_file, save_handin_file
 
 router = APIRouter()
 
 _MAX_SOURCES = 8
 _TYPES = ["mcq", "short", "long"]
+# What each kind of assessment is made of.
+_POOL_TYPES = {"quiz": ["mcq"], "assignment": ["short", "long"]}
+_MAX_ASSIGNMENT_QUESTIONS = 25
+_MAX_HANDIN_BYTES = 20 * 1024 * 1024
 
 
 def _unprocessable(detail: str) -> HTTPException:
@@ -103,32 +118,31 @@ def list_questions(workspace_id: UUID, claims: dict = Depends(require_faculty)) 
 def generate_questions(
     workspace_id: UUID, body: GenerateQuestionsRequest, claims: dict = Depends(require_faculty)
 ) -> GenerateQuestionsResponse:
-    """Has the LLM draft questions on a topic from the chosen sources (this
-    workspace's documents and the institute library's). They're saved as
-    drafts for review; near-duplicates of the bank are dropped.
+    """Has the LLM draft questions from the chosen sources (this
+    workspace's documents). It labels each one's topic and picks its subject
+    from the workspace's. They're saved as drafts for review; near-duplicates
+    of the bank are dropped.
     """
     member_workspace(workspace_id, claims)
-    subject = _required_text(body.subject, "subject")
-    topic = _required_text(body.topic, "topic")
     types = list(dict.fromkeys(body.types))
+    if not types:
+        raise _unprocessable("pick a question type")
     difficulties = sorted({d for d in body.difficulties if d in (1, 2, 3)})
-    if not types or not difficulties:
-        raise _unprocessable("pick at least one question type and difficulty")
+    if not difficulties:
+        raise _unprocessable("pick at least one difficulty")
 
     source_ids = list(dict.fromkeys(body.source_doc_ids))
     if not source_ids or len(source_ids) > _MAX_SOURCES:
         raise _unprocessable(f"pick 1 to {_MAX_SOURCES} source documents")
-    allowed = {d["id"]: d for d in queries.list_note_source_documents(workspace_id)}
+    allowed = {d["id"]: d for d in queries.list_note_source_documents(workspace_id) if d["workspace_id"]}
     if not set(source_ids) <= allowed.keys():
-        raise _unprocessable("sources must be ready documents in this workspace or the institute library")
+        raise _unprocessable("sources must be ready documents in this workspace")
     sources = [{"doc_id": str(i), "title": allowed[i]["title"]} for i in source_ids]
 
     try:
         drafts, duplicates = draft_questions(
             claims,
             workspace_id=workspace_id,
-            subject=subject,
-            topic=topic,
             sources=sources,
             count=body.count,
             types=types,
@@ -138,9 +152,7 @@ def generate_questions(
     except GenerationError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Couldn't write questions: {exc}") from exc
 
-    ids = queries.insert_questions(
-        workspace_id=workspace_id, subject=subject, topic=topic, questions=drafts, actor_email=claims["sub"]
-    )
+    ids = queries.insert_questions(workspace_id=workspace_id, questions=drafts, actor_email=claims["sub"])
     return GenerateQuestionsResponse(questions=[queries.get_question(i) for i in ids], duplicates=duplicates)
 
 
@@ -151,14 +163,12 @@ def create_question(workspace_id: UUID, body: CreateQuestionRequest, claims: dic
     """
     member_workspace(workspace_id, claims)
     question = _content(body)
+    question["subject"] = _required_text(body.subject, "subject")
+    question["topic"] = _required_text(body.topic, "topic")
     question["embedding"] = embed_texts([question_text(question["body"])])[0]
     _refuse_duplicate(workspace_id, question["embedding"])
     [question_id] = queries.insert_questions(
-        workspace_id=workspace_id,
-        subject=_required_text(body.subject, "subject"),
-        topic=_required_text(body.topic, "topic"),
-        questions=[question],
-        actor_email=claims["sub"],
+        workspace_id=workspace_id, questions=[question], actor_email=claims["sub"]
     )
     return queries.get_question(question_id)
 
@@ -230,6 +240,9 @@ def _plan(classroom: dict, config: AssessmentConfig) -> dict:
     result = {"subject": subject or None, "students": len(roster), "sharing": [], "needed": None, "sets": {}}
     if not subject:
         return {**result, "ok": False, "available": 0, "message": "set a subject (or give the classroom one)"}
+    if config.kind == "assignment" and config.count > _MAX_ASSIGNMENT_QUESTIONS:
+        return {**result, "ok": False, "available": 0,
+                "message": f"an assignment can have at most {_MAX_ASSIGNMENT_QUESTIONS} questions"}
 
     key = queries.rule_key(subject, classroom["term"])
     result["key"] = key
@@ -237,8 +250,9 @@ def _plan(classroom: dict, config: AssessmentConfig) -> dict:
         classroom["workspace_id"],
         subject=subject,
         topics=config.topics,
-        types=config.types,
+        types=_POOL_TYPES[config.kind],
         difficulties=config.difficulties,
+        doc_ids=config.source_doc_ids,
         unused_by_assignments=key if config.kind == "assignment" else None,
     )
     pool = [PoolQuestion(str(r["id"]), r["topic"], r["difficulty"], r["option_count"]) for r in pool_rows]
@@ -267,7 +281,7 @@ def _plan(classroom: dict, config: AssessmentConfig) -> dict:
         message = str(exc).capitalize()
         if config.kind == "assignment":
             message = (
-                f"Only {len(pool)} matching approved {subject} question{'s' if len(pool) != 1 else ''} "
+                f"Only {len(pool)} matching approved written {subject} question{'s' if len(pool) != 1 else ''} "
                 f"aren't used by another assignment this term; this one needs {config.count}."
             )
         return {**result, "ok": False, "message": message, "needed": exc.needed, "sets": {}}
@@ -318,19 +332,167 @@ def _full_assessment(assessment: dict, classroom: dict) -> dict:
                 "options": options,
                 "correct": correct,
                 "explanation": item["answer"].get("explanation", ""),
+                "option_order": item["option_order"],
+                "source_doc_ids": item["source_doc_ids"],
             }
         )
+    roster = queries.list_classroom_students(classroom["id"])
     missing = []
     if assessment["kind"] == "quiz":
-        roster = [s["email"] for s in queries.list_classroom_students(classroom["id"])]
-        missing = [e for e in roster if e not in sets]
-    return {**assessment, "sets": list(sets.values()), "missing_students": missing}
+        missing = [s["email"] for s in roster if s["email"] not in sets]
+    return {
+        **assessment,
+        "sets": list(sets.values()),
+        "missing_students": missing,
+        "results": _results(assessment, sets, roster),
+    }
+
+
+def _results(assessment: dict, sets: dict, roster: list[dict]) -> list[dict]:
+    """Marks per student, by name: quiz students with a set, or an
+    assignment's classroom; plus anyone who submitted and since left.
+    `choices` maps each position to the option they picked as shown.
+    """
+    submissions = {s["student_email"]: s for s in queries.list_submissions(assessment["id"])}
+    if assessment["kind"] == "quiz":
+        people = {e: s["student_name"] for e, s in sets.items()}
+    else:
+        people = {s["email"]: s["name"] for s in roster}
+    for email, sub in submissions.items():
+        people.setdefault(email, sub["student_name"])
+
+    results = []
+    for email, name in people.items():
+        sub = submissions.get(email)
+        choices = {}
+        if sub is not None and assessment["kind"] == "quiz":
+            picked = {a["question_id"]: a["choice"] for a in sub["answers"]}
+            for item in (sets.get(email) or sets.get(None) or {"items": []})["items"]:
+                choice = picked.get(str(item["question_id"]))
+                choices[item["position"]] = _shown_index(item["option_order"], choice)
+        results.append(
+            {
+                "student_email": email,
+                "student_name": name,
+                "score": sub["score"] if sub else None,
+                "total": sub["total"] if sub else None,
+                "submitted_at": sub["submitted_at"] if sub else None,
+                "late": bool(sub and assessment["due_at"] and sub["submitted_at"] > assessment["due_at"]),
+                "marked_by": sub["marked_by"] if sub else None,
+                "file_name": sub["file_name"] if sub else None,
+                "file_size": sub["file_size"] if sub else None,
+                "choices": choices,
+            }
+        )
+    return sorted(results, key=lambda r: (r["student_name"] or r["student_email"]).lower())
+
+
+def _shown_index(option_order: list[int] | None, choice: int | None) -> int | None:
+    """Where the option stored as `choice` sits in the order a set shows."""
+    if choice is None:
+        return None
+    order = option_order or []
+    return order.index(choice) if choice in order else choice
 
 
 @router.get("/classrooms/{classroom_id}/assessments", response_model=list[AssessmentSummaryOut])
 def list_assessments(classroom_id: UUID, claims: dict = Depends(require_faculty)) -> list[AssessmentSummaryOut]:
     managed_classroom(classroom_id, claims)
     return queries.list_assessments(classroom_id)
+
+
+@router.get("/classrooms/{classroom_id}/analytics", response_model=ClassroomAnalyticsOut)
+def classroom_analytics(classroom_id: UUID, claims: dict = Depends(require_faculty)) -> ClassroomAnalyticsOut:
+    """How a classroom is doing across its quizzes and assignments: each
+    assessment's turnout and average, each student's record, how well each
+    chapter (source doc) is understood, and the questions most got wrong.
+    Quiz marks only; assignments are marked on paper, so they count as
+    handed in or not.
+    """
+    classroom = managed_classroom(classroom_id, claims)
+    roster = queries.list_classroom_students(classroom_id)
+    students = {
+        s["email"]: {"email": s["email"], "name": s["name"], "quiz_scores": [], "quizzes": 0,
+                     "assignments": 0, "handed_in": 0, "missed": 0, "late": 0}
+        for s in roster
+    }
+    now = datetime.now(timezone.utc)
+    assessments, chapters, questions = [], {}, {}
+
+    for summary in queries.list_assessments(classroom_id):
+        full = _full_assessment(summary, classroom)
+        is_quiz = full["kind"] == "quiz"
+        overdue = full["due_at"] is not None and full["due_at"] <= now
+        sets = {s["student_email"]: s for s in full["sets"]}
+        done, percents, late = 0, [], 0
+        for r in full["results"]:
+            person = students.get(r["student_email"])
+            submitted = r["submitted_at"] is not None
+            done += submitted
+            late += r["late"]
+            if is_quiz and r["score"] is not None and r["total"]:
+                percents.append(r["score"] / r["total"])
+            if person is None:
+                continue  # left the classroom since
+            person["quizzes" if is_quiz else "assignments"] += 1
+            if submitted:
+                person["handed_in"] += 1
+                person["late"] += r["late"]
+                if is_quiz and r["score"] is not None and r["total"]:
+                    person["quiz_scores"].append(r["score"] / r["total"])
+            elif overdue:
+                person["missed"] += 1
+
+            if not (is_quiz and submitted):
+                continue
+            for item in (sets.get(r["student_email"]) or {"items": []})["items"]:
+                right = r["choices"].get(item["position"]) == item["correct"]
+                q = questions.setdefault(
+                    item["question_id"],
+                    {"question_id": item["question_id"], "prompt": item["prompt"], "assessment": full["title"],
+                     "answered": 0, "right": 0},
+                )
+                q["answered"] += 1
+                q["right"] += right
+                for doc_id in item["source_doc_ids"] or [None]:
+                    c = chapters.setdefault(doc_id, {"doc_id": doc_id, "answered": 0, "right": 0})
+                    c["answered"] += 1
+                    c["right"] += right
+
+        assessments.append({
+            "id": full["id"], "kind": full["kind"], "title": full["title"], "due_at": full["due_at"],
+            "created_at": full["created_at"], "assigned": len(full["results"]), "submitted": done, "late": late,
+            "average": sum(percents) / len(percents) if percents else None,
+        })
+
+    titles = {d["id"]: d["title"] for d in queries.get_documents([d for d in chapters if d is not None])}
+    chapter_rows = sorted(
+        ({**c, "title": titles.get(c["doc_id"], "Written by hand" if c["doc_id"] is None else "A removed doc"),
+          "accuracy": c["right"] / c["answered"]} for c in chapters.values()),
+        key=lambda c: c["accuracy"],
+    )
+    hardest = sorted(
+        ({**q, "accuracy": q["right"] / q["answered"]} for q in questions.values() if q["answered"] >= 2),
+        key=lambda q: (q["accuracy"], -q["answered"]),
+    )[:5]
+    student_rows = [
+        {**{k: v for k, v in s.items() if k != "quiz_scores"},
+         "average": sum(s["quiz_scores"]) / len(s["quiz_scores"]) if s["quiz_scores"] else None}
+        for s in students.values()
+    ]
+    all_scores = [p for s in students.values() for p in s["quiz_scores"]]
+    given = sum(a["assigned"] for a in assessments)
+    return ClassroomAnalyticsOut(
+        students=len(roster),
+        quizzes=sum(a["kind"] == "quiz" for a in assessments),
+        assignments=sum(a["kind"] == "assignment" for a in assessments),
+        average=sum(all_scores) / len(all_scores) if all_scores else None,
+        completion=sum(a["submitted"] for a in assessments) / given if given else None,
+        assessments=assessments,
+        student_rows=sorted(student_rows, key=lambda s: (s["name"] or s["email"]).lower()),
+        chapters=chapter_rows,
+        hardest=hardest,
+    )
 
 
 @router.post("/classrooms/{classroom_id}/assessments/check", response_model=AssessmentCheckOut)
@@ -358,7 +520,8 @@ def create_assessment(
     plan = _plan(classroom, body)
     if not plan["ok"]:
         raise _unprocessable(plan["message"])
-    config = body.model_dump(include={"count", "topics", "types", "difficulties", "max_overlap"})
+    config = body.model_dump(mode="json", include={"count", "source_doc_ids", "topics", "difficulties", "max_overlap"})
+    config["types"] = _POOL_TYPES[body.kind]
     if body.kind == "assignment":
         config["max_overlap"] = None
     assessment_id = queries.insert_assessment(
@@ -405,8 +568,9 @@ def add_quiz_students(assessment_id: UUID, claims: dict = Depends(require_facult
         classroom["workspace_id"],
         subject=assessment["subject"],
         topics=config["topics"],
-        types=config["types"],
+        types=_POOL_TYPES["quiz"],
         difficulties=config["difficulties"],
+        doc_ids=[UUID(d) for d in config.get("source_doc_ids", [])],
     )
     pool = [PoolQuestion(str(r["id"]), r["topic"], r["difficulty"], r["option_count"]) for r in pool_rows]
     existing = [[str(i["question_id"]) for i in s["items"]] for s in current["sets"]]
@@ -426,13 +590,62 @@ def add_quiz_students(assessment_id: UUID, claims: dict = Depends(require_facult
     return _full_assessment(*_assessment(assessment_id, claims))
 
 
+@router.put("/assessments/{assessment_id}/submissions/{email}", response_model=AssessmentOut)
+def mark_handed_in(assessment_id: UUID, email: str, claims: dict = Depends(require_faculty)) -> AssessmentOut:
+    """Ticks off an assignment handed in on paper for a classroom student."""
+    assessment, classroom = _assessment(assessment_id, claims)
+    if assessment["kind"] != "assignment":
+        raise _unprocessable("quizzes are submitted by students in the app")
+    email = email.strip().lower()
+    if email not in {s["email"] for s in queries.list_classroom_students(classroom["id"])}:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not a student in this classroom")
+    queries.insert_submission(
+        assessment_id=assessment_id, email=email, answers=[], score=None, total=None, marked_by=claims["sub"]
+    )  # already handed in: nothing to do
+    return _full_assessment(assessment, classroom)
+
+
+@router.delete("/assessments/{assessment_id}/submissions/{email}", response_model=AssessmentOut)
+def unmark_handed_in(assessment_id: UUID, email: str, claims: dict = Depends(require_faculty)) -> AssessmentOut:
+    """Undoes an assignment hand-in (ticked off by mistake). Quiz
+    submissions are graded answers and can't be undone.
+    """
+    assessment, classroom = _assessment(assessment_id, claims)
+    if assessment["kind"] != "assignment":
+        raise _unprocessable("quiz submissions can't be undone")
+    removed = queries.delete_submission(assessment_id, email.strip().lower())
+    if removed and removed["file_path"]:
+        delete_stored_file(removed["file_path"])
+    return _full_assessment(assessment, classroom)
+
+
+def _pdf_response(submission: dict | None) -> Response:
+    if submission is None or not submission["file_path"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no PDF handed in")
+    try:
+        with open(submission["file_path"], "rb") as f:
+            data = f.read()
+    except FileNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "the file is missing") from exc
+    name = submission["file_name"].replace('"', "")
+    return Response(data, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{name}"'})
+
+
+@router.get("/assessments/{assessment_id}/submissions/{email}/file")
+def get_handed_in_file(assessment_id: UUID, email: str, claims: dict = Depends(require_faculty)) -> Response:
+    """A student's handed-in PDF, for faculty of the classroom's workspace."""
+    _assessment(assessment_id, claims)
+    return _pdf_response(queries.get_submission(assessment_id, email.strip().lower()))
+
+
 @router.delete("/assessments/{assessment_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_assessment(assessment_id: UUID, claims: dict = Depends(require_faculty)) -> None:
     """Deletes it for everyone; an assignment's questions become free for
     other classrooms again.
     """
     _assessment(assessment_id, claims)
-    queries.delete_assessment(assessment_id)
+    for path in queries.delete_assessment(assessment_id):
+        delete_stored_file(path)
 
 
 # --- Student side ---
@@ -443,14 +656,115 @@ def list_my_assessments(claims: dict = Depends(require_student)) -> list[Student
     return queries.list_student_assessments(claims["sub"])
 
 
+def _due_passed(assessment: dict) -> bool:
+    return assessment["due_at"] is not None and assessment["due_at"] <= datetime.now(tz=timezone.utc)
+
+
 @router.get("/my/assessments/{assessment_id}", response_model=StudentAssessmentOut)
 def get_my_assessment(assessment_id: UUID, claims: dict = Depends(require_student)) -> StudentAssessmentOut:
-    """The caller's own questions, in their order, without answers."""
+    """The caller's own questions, in their order. After they've submitted:
+    their picks and marks, and (once any due date has passed) the answers.
+    """
+    assessment = queries.get_student_assessment(assessment_id, claims["sub"], with_answers=True)
+    if assessment is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not found")
+    submission = queries.get_submission(assessment_id, claims["sub"])
+    is_quiz = assessment["kind"] == "quiz"
+    # An assignment's model answers stay with faculty: it's checked on paper.
+    visible = is_quiz and submission is not None and (assessment["due_at"] is None or _due_passed(assessment))
+    picked = {a["question_id"]: a["choice"] for a in submission["answers"]} if submission else {}
+    items = []
+    for item in assessment.pop("items"):
+        options, correct = _shown(item)
+        out = {"position": item["position"], "type": item["type"], "prompt": item["body"]["prompt"], "options": options}
+        if submission is not None and is_quiz:
+            out["choice"] = _shown_index(item["option_order"], picked.get(str(item["question_id"])))
+            out["is_right"] = out["choice"] is not None and out["choice"] == correct
+        if visible:
+            out["correct"] = correct
+            out["explanation"] = item["answer"].get("explanation", "")
+        items.append(out)
+    return StudentAssessmentOut(
+        **assessment,
+        question_count=len(items),
+        items=items,
+        score=submission["score"] if submission else None,
+        total=submission["total"] if submission else None,
+        submitted_at=submission["submitted_at"] if submission else None,
+        closed=is_quiz and submission is None and _due_passed(assessment),
+        file_name=submission["file_name"] if submission else None,
+        file_size=submission["file_size"] if submission else None,
+        results_visible=visible,
+    )
+
+
+@router.post("/my/assessments/{assessment_id}/submit", response_model=StudentAssessmentOut)
+def submit_my_assessment(
+    assessment_id: UUID, body: SubmitAnswersRequest, claims: dict = Depends(require_student)
+) -> StudentAssessmentOut:
+    """Grades and saves the caller's quiz answers (once; 409 if already
+    submitted, 422 once the due date has passed). Each answer is an option
+    index as the student's set shows it. Assignments are handed in with
+    `hand_in_assignment` instead.
+    """
+    assessment = queries.get_student_assessment(assessment_id, claims["sub"], with_answers=True)
+    if assessment is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not found")
+    if assessment["kind"] == "assignment":
+        raise _unprocessable("hand in an assignment by uploading your answers as a PDF")
+    if _due_passed(assessment):
+        raise _unprocessable("the due date has passed")
+    given = {a.position: a.choice for a in body.answers}
+    answers, score, total = [], 0, 0
+    for item in assessment["items"]:
+        if item["type"] != "mcq":
+            continue  # older written questions aren't graded here
+        options, correct = _shown(item)
+        shown = given.get(item["position"])
+        if shown is not None and not 0 <= shown < len(options):
+            raise _unprocessable(f"question {item['position']} has no option {shown + 1}")
+        order = item["option_order"] or list(range(len(options)))
+        choice = order[shown] if shown is not None else None
+        answers.append({"question_id": str(item["question_id"]), "choice": choice})
+        total += 1
+        score += shown is not None and shown == correct
+    if not queries.insert_submission(
+        assessment_id=assessment_id, email=claims["sub"], answers=answers, score=score, total=total
+    ):
+        raise HTTPException(status.HTTP_409_CONFLICT, "you've already submitted this")
+    return get_my_assessment(assessment_id, claims)
+
+
+@router.post("/my/assessments/{assessment_id}/hand-in", response_model=StudentAssessmentOut)
+async def hand_in_assignment(
+    assessment_id: UUID, file: UploadFile = File(...), claims: dict = Depends(require_student)
+) -> StudentAssessmentOut:
+    """Hands in the caller's assignment as a PDF (up to 20 MB), replacing
+    one they handed in before. Late hand-ins are allowed and show as late.
+    """
     assessment = queries.get_student_assessment(assessment_id, claims["sub"])
     if assessment is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not found")
-    items = []
-    for item in assessment.pop("items"):
-        options, _ = _shown(item)
-        items.append({"position": item["position"], "type": item["type"], "prompt": item["body"]["prompt"], "options": options})
-    return StudentAssessmentOut(**assessment, question_count=len(items), items=items)
+    if assessment["kind"] != "assignment":
+        raise _unprocessable("quizzes are answered in the app")
+    data = await file.read(_MAX_HANDIN_BYTES + 1)
+    if len(data) > _MAX_HANDIN_BYTES:
+        raise _unprocessable("the PDF is over 20 MB; scan at a lower resolution")
+    if not data.startswith(b"%PDF"):
+        raise _unprocessable("that isn't a PDF; export or scan your answers to PDF")
+    name = (file.filename or "answers.pdf").strip()[:120] or "answers.pdf"
+    path = save_handin_file(data)
+    replaced = queries.save_file_submission(
+        assessment_id=assessment_id, email=claims["sub"], file_path=str(path), file_name=name, file_size=len(data)
+    )
+    if replaced:
+        delete_stored_file(replaced)
+    return get_my_assessment(assessment_id, claims)
+
+
+@router.get("/my/assessments/{assessment_id}/hand-in")
+def get_my_handed_in_file(assessment_id: UUID, claims: dict = Depends(require_student)) -> Response:
+    """The caller's own handed-in PDF."""
+    if queries.get_student_assessment(assessment_id, claims["sub"]) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not found")
+    return _pdf_response(queries.get_submission(assessment_id, claims["sub"]))

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { ApiError, deleteNote, downloadNote, getNote, publishNote, redraftNote, updateNote } from "../api/client";
-import { diffLines, slidesText, splitSections } from "../ui/diff";
+import { ApiError, deleteNote, downloadNote, getNote, publishNote, redraftNote, reviseNote, updateNote } from "../api/client";
+import { diffLines, slidesText } from "../ui/diff";
 import Icon from "../ui/Icons";
 import { timeAgo } from "../ui/spines";
 import { publishState } from "./noteState";
+import { confirmDialog } from "../ui/confirm";
+import Loading from "../ui/Loading";
 
 function errorText(err, fallback) {
   return err instanceof ApiError ? err.message : fallback;
@@ -19,20 +19,18 @@ function unsavedChanges(note, draft) {
   for (const field of ["title", "subject", "topic"]) {
     if ((draft[field] ?? "") !== (note[field] ?? "")) changes[field] = draft[field];
   }
-  if (note.kind === "notes" && draft.body_md !== note.body_md) changes.body_md = draft.body_md;
-  if (note.kind === "slides" && JSON.stringify(draft.slides) !== JSON.stringify(note.slides)) changes.slides = draft.slides;
+  if (JSON.stringify(draft.slides) !== JSON.stringify(note.slides)) changes.slides = draft.slides;
   return changes;
 }
 
 function draftFrom(note) {
-  return { title: note.title, subject: note.subject ?? "", topic: note.topic, body_md: note.body_md, slides: note.slides };
+  return { title: note.title, subject: note.subject ?? "", topic: note.topic, slides: note.slides };
 }
 
 /**
- * Editing one note or deck. Edits stay local until Save. If its sources
- * changed since it was written, a banner offers a redraft from their
- * current versions (the whole thing, or one section of notes), shown as a
- * diff to accept or discard, or "Mark up to date" once checked by hand.
+ * Editing one slide deck. Edits stay local until Save. If its sources
+ * changed since it was written, a banner offers a redraft of the deck from
+ * their current versions, shown as a diff to accept or discard, or "Mark up to date" once checked by hand.
  * Publish saves first, then makes it a workspace doc (faculty only, or
  * classrooms too).
  */
@@ -42,9 +40,10 @@ export default function NoteEditor({ token, noteId, workspace, classrooms, onBac
   const [error, setError] = useState("");
   const [conflict, setConflict] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [redrafting, setRedrafting] = useState(null); // "all" | section index
+  const [redrafting, setRedrafting] = useState(false);
   const [proposal, setProposal] = useState(null); // {label, before, after, apply(draft) -> draft | null}
   const [publishing, setPublishing] = useState(false);
+  const [revising, setRevising] = useState(false); // the "Edit with AI" dialog is open
 
   const load = useCallback(async () => {
     try {
@@ -92,7 +91,7 @@ export default function NoteEditor({ token, noteId, workspace, classrooms, onBac
     return (
       <div className="note-editor">
         <BackButton onBack={onBack} />
-        {error ? <p className="form-error">{error}</p> : <p className="desk-empty">Opening...</p>}
+        {error ? <p className="form-error">{error}</p> : <Loading label="Opening" />}
       </div>
     );
   }
@@ -119,76 +118,81 @@ export default function NoteEditor({ token, noteId, workspace, classrooms, onBac
     }
   }
 
-  function back() {
-    if (dirty && !window.confirm("Leave without saving your changes?")) return;
-    onBack();
+  async function back() {
+    const ok =
+      !dirty ||
+      (await confirmDialog({
+        title: "Leave without saving?",
+        message: "Your unsaved changes will be lost.",
+        confirmLabel: "Leave",
+        danger: true,
+      }));
+    if (ok) onBack();
   }
 
-  function reload() {
-    if (dirty && !window.confirm("Reloading discards your unsaved changes. Continue?")) return;
-    load();
+  async function reload() {
+    const ok =
+      !dirty ||
+      (await confirmDialog({
+        title: "Discard your changes?",
+        message: "Reloading replaces them with the last saved version.",
+        confirmLabel: "Reload",
+        danger: true,
+      }));
+    if (ok) load();
   }
 
   async function redraftAll() {
-    setRedrafting("all");
+    setRedrafting(true);
     setError("");
     try {
       const result = await redraftNote(token, note.id);
-      if (note.kind === "slides") {
-        setProposal({
-          label: "the whole deck",
-          before: slidesText(draft.slides),
-          after: slidesText(result.slides),
-          apply: (now) => ({ ...now, slides: result.slides }),
-        });
-      } else {
-        setProposal({
-          label: "the whole note",
-          before: draft.body_md,
-          after: result.body_md,
-          apply: (now) => ({ ...now, body_md: result.body_md }),
-        });
-      }
+      setProposal({
+        label: "the whole deck",
+        before: slidesText(draft.slides),
+        after: slidesText(result.slides),
+        apply: (now) => ({ ...now, slides: result.slides }),
+      });
     } catch (err) {
       setError(errorText(err, "Couldn't redraft it."));
     } finally {
-      setRedrafting(null);
+      setRedrafting(false);
     }
   }
 
-  async function redraftSection(index) {
-    const { sections } = splitSections(draft.body_md);
-    const original = sections[index];
-    setRedrafting(index);
-    setError("");
+  /**
+   * Asks the model to apply a change described in words to the deck as it
+   * is in the editor, then shows it as a diff to accept or discard. Returns
+   * an error message, or null when the diff is up.
+   */
+  async function revise(changeRequest) {
+    const before = draft.slides;
     try {
-      const result = await redraftNote(token, note.id, original);
-      // Keep the blank lines that separated it from the next section.
-      const trailing = /\s*$/.exec(original)[0];
-      const replacement = result.body_md.trimEnd() + (trailing || "\n");
+      const result = await reviseNote(token, note.id, changeRequest, before);
       setProposal({
-        label: `“${headingOf(original)}”`,
-        before: original.trimEnd(),
-        after: result.body_md.trimEnd(),
-        // null if the section was edited while the redraft was being written
-        apply: (now) => {
-          const current = splitSections(now.body_md);
-          const at = current.sections.indexOf(original);
-          if (at === -1) return null;
-          current.sections[at] = replacement;
-          return { ...now, body_md: current.intro + current.sections.join("") };
-        },
+        heading: "Suggested edit",
+        label: `“${changeRequest}”`,
+        note: "Your change, applied to the deck as it is in the editor (unsaved edits included).",
+        before: slidesText(before),
+        after: slidesText(result.slides),
+        // null if the deck was edited while the change was being written
+        apply: (now) => (now.slides === before ? { ...now, slides: result.slides } : null),
       });
+      return null;
     } catch (err) {
-      setError(errorText(err, "Couldn't redraft that section."));
-    } finally {
-      setRedrafting(null);
+      return errorText(err, "Couldn't make that change.");
     }
   }
 
   async function remove() {
     const published = note.document_id ? " Its published doc stays in the library; remove it there if needed." : "";
-    if (!window.confirm(`Delete "${note.title}"? This can't be undone.${published}`)) return;
+    const ok = await confirmDialog({
+      title: `Delete "${note.title}"?`,
+      message: `This can't be undone.${published}`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await deleteNote(token, note.id);
       onBack();
@@ -203,7 +207,14 @@ export default function NoteEditor({ token, noteId, workspace, classrooms, onBac
   }
 
   async function download() {
-    if (dirty && !window.confirm("The download is the last saved version. Download it anyway?")) return;
+    const ok =
+      !dirty ||
+      (await confirmDialog({
+        title: "Download the saved version?",
+        message: "Your unsaved changes aren't in the download.",
+        confirmLabel: "Download",
+      }));
+    if (!ok) return;
     try {
       await downloadNote(token, note.id);
     } catch (err) {
@@ -213,8 +224,8 @@ export default function NoteEditor({ token, noteId, workspace, classrooms, onBac
 
   const state = publishState(note, classrooms);
   const changedSources = note.source_status.filter((s) => s.changed);
-  const busy = saving || redrafting !== null;
-  const empty = note.kind === "notes" ? !draft.body_md.trim() : draft.slides.length === 0;
+  const busy = saving || redrafting;
+  const empty = draft.slides.length === 0;
 
   return (
     <div className="note-editor">
@@ -225,8 +236,11 @@ export default function NoteEditor({ token, noteId, workspace, classrooms, onBac
           {dirty ? "Unsaved changes" : `Saved ${timeAgo(note.updated_at)} by ${note.updated_by_name}`}
         </span>
         <div className="note-bar-actions">
-          <button className="btn btn-ghost" onClick={download} title={note.kind === "slides" ? "Download as PowerPoint" : "Download as Markdown"}>
-            <Icon name="download" /> {note.kind === "slides" ? ".pptx" : ".md"}
+          <button className="btn btn-ghost btn-ai" disabled={busy} onClick={() => setRevising(true)}>
+            <Icon name="sparkle" /> Edit with AI
+          </button>
+          <button className="btn btn-ghost" onClick={download} title="Download as PowerPoint">
+            <Icon name="download" /> .pptx
           </button>
           <button className="btn btn-ghost" disabled={busy || empty} onClick={openPublish}>
             {note.document_id ? "Republish" : "Publish"}
@@ -264,13 +278,13 @@ export default function NoteEditor({ token, noteId, workspace, classrooms, onBac
               ))}
             </ul>
             <small>
-              Nothing changes on its own. Redraft {note.kind === "notes" ? "a section or the whole note" : "the deck"} and
+              Nothing changes on its own. Redraft the deck and
               compare, or mark it up to date once you&apos;ve checked it.
             </small>
           </div>
           <div className="stale-actions">
             <button className="btn btn-ghost" disabled={busy} onClick={redraftAll}>
-              <Icon name="refresh" /> {redrafting === "all" ? "Redrafting..." : "Redraft all"}
+              <Icon name="refresh" /> {redrafting ? "Redrafting..." : "Redraft deck"}
             </button>
             <button className="btn btn-ghost" disabled={busy} onClick={() => save({ mark_up_to_date: true })}>
               Mark up to date
@@ -296,11 +310,7 @@ export default function NoteEditor({ token, noteId, workspace, classrooms, onBac
         </label>
       </div>
 
-      {note.kind === "notes" ? (
-        <NotesBody draft={draft} setDraft={setDraft} busy={busy} redrafting={redrafting} onRedraftSection={redraftSection} onRedraftAll={redraftAll} />
-      ) : (
-        <SlidesBody slides={draft.slides} onChange={(slides) => setDraft({ ...draft, slides })} />
-      )}
+      <SlidesBody slides={draft.slides} onChange={(slides) => setDraft({ ...draft, slides })} />
 
       <div className="lib-lower note-lower">
         <section className="panel" aria-labelledby="sources-h">
@@ -322,19 +332,30 @@ export default function NoteEditor({ token, noteId, workspace, classrooms, onBac
           <p className="form-note">Cited in the text by number, e.g. [1]. Published copies list them at the end.</p>
         </section>
         <section className="panel" aria-labelledby="note-danger-h">
-          <h2 id="note-danger-h">{note.kind === "slides" ? "This deck" : "This note"}</h2>
+          <h2 id="note-danger-h">This deck</h2>
           <p className="form-note" style={{ marginTop: 0 }}>
             Created by {note.created_by_name}. Anyone in {workspace.kind === "personal" ? "your workspace" : workspace.name} can
             edit it; saves never overwrite someone else&apos;s newer changes.
           </p>
           <div className="danger-zone">
             <button className="btn btn-danger" onClick={remove}>
-              Delete {note.kind === "slides" ? "deck" : "note"}
+              Delete deck
             </button>
           </div>
         </section>
       </div>
 
+      {revising && (
+        <ReviseDialog
+          slideCount={draft.slides.length}
+          onClose={() => setRevising(false)}
+          onSubmit={async (text) => {
+            const failed = await revise(text);
+            if (!failed) setRevising(false);
+            return failed;
+          }}
+        />
+      )}
       {proposal && (
         <CompareDialog
           proposal={proposal}
@@ -342,7 +363,7 @@ export default function NoteEditor({ token, noteId, workspace, classrooms, onBac
           onAccept={() => {
             const next = proposal.apply(draft);
             if (next) setDraft(next);
-            else setError("That section was edited while the redraft was being written; redraft it again.");
+            else setError("The deck was edited while that was being written; try it again.");
             setProposal(null);
           }}
         />
@@ -378,55 +399,11 @@ function pick(obj, keys) {
   return Object.fromEntries(keys.filter((k) => k in obj).map((k) => [k, obj[k]]));
 }
 
-function headingOf(section) {
-  return section.split("\n")[0].replace(/^##\s*/, "").trim() || "Untitled section";
-}
-
 function BackButton({ onBack }) {
   return (
     <button className="btn btn-ghost note-back" onClick={onBack}>
-      <Icon name="arrowLeft" /> All notes
+      <Icon name="arrowLeft" /> All decks
     </button>
-  );
-}
-
-/**
- * Markdown on the left, the rendered page on the right; under them, each
- * "## " section with a button to redraft just that one.
- */
-function NotesBody({ draft, setDraft, busy, redrafting, onRedraftSection, onRedraftAll }) {
-  const { sections } = splitSections(draft.body_md);
-  return (
-    <>
-      <div className="note-split">
-        <textarea
-          className="input note-md"
-          aria-label="Notes (Markdown)"
-          spellCheck
-          placeholder={"## First section\n\nWrite in Markdown. Cite sources by number, e.g. [1]."}
-          value={draft.body_md}
-          onChange={(e) => setDraft({ ...draft, body_md: e.target.value })}
-        />
-        <div className="note-preview a-text" aria-label="Preview">
-          {draft.body_md.trim() ? (
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{draft.body_md}</ReactMarkdown>
-          ) : (
-            <p className="form-note">The preview appears here.</p>
-          )}
-        </div>
-      </div>
-      <div className="note-sections">
-        <span className="field-label">Redraft from the current sources:</span>
-        {sections.map((section, i) => (
-          <button key={i} className="chip" disabled={busy} onClick={() => onRedraftSection(i)}>
-            <Icon name="refresh" /> {redrafting === i ? "Redrafting..." : headingOf(section)}
-          </button>
-        ))}
-        <button className="chip" disabled={busy} onClick={onRedraftAll}>
-          <Icon name="refresh" /> {redrafting === "all" ? "Redrafting..." : "Whole note"}
-        </button>
-      </div>
-    </>
   );
 }
 
@@ -450,43 +427,53 @@ function SlidesBody({ slides, onChange }) {
         A title slide and a sources slide are added when the deck is downloaded or published.
       </p>
       {slides.map((s, i) => (
-        <section className="slide-card" key={i} aria-label={`Slide ${i + 1}`}>
-          <div className="slide-num">{i + 2}</div>
-          <div className="slide-fields">
+        <section className="slide-card" key={i} aria-label={`Slide ${i + 2}`}>
+          <header className="slide-head">
+            <span className="slide-num" title="Slide 1 is the title slide">{i + 2}</span>
             <input
-              className="input slide-title"
+              className="slide-title"
               aria-label="Slide title"
               placeholder="Slide title"
               value={s.title}
               onChange={(e) => update(i, { title: e.target.value })}
             />
+            <div className="slide-tools">
+              <button className="icon-btn" aria-label="Move up" title="Move up" disabled={i === 0} onClick={() => move(i, -1)}>
+                <Icon name="arrowUp" />
+              </button>
+              <button
+                className="icon-btn"
+                aria-label="Move down"
+                title="Move down"
+                disabled={i === slides.length - 1}
+                onClick={() => move(i, 1)}
+              >
+                <Icon name="arrowDown" />
+              </button>
+              <button className="icon-btn is-danger" aria-label="Remove slide" title="Remove slide" onClick={() => onChange(slides.filter((_, k) => k !== i))}>
+                <Icon name="trash" />
+              </button>
+            </div>
+          </header>
+          <div className="slide-fields">
             <textarea
-              className="input"
+              className="input slide-bullets"
               aria-label="Bullets, one per line"
               placeholder="One bullet per line"
               rows={Math.max(3, s.bullets.length + 1)}
               value={s.bullets.join("\n")}
               onChange={(e) => update(i, { bullets: e.target.value.split("\n") })}
             />
-            <textarea
-              className="input slide-notes"
-              aria-label="Speaker notes"
-              placeholder="Speaker notes"
-              rows={2}
-              value={s.notes}
-              onChange={(e) => update(i, { notes: e.target.value })}
-            />
-          </div>
-          <div className="slide-tools">
-            <button className="icon-btn" aria-label="Move up" disabled={i === 0} onClick={() => move(i, -1)}>
-              <Icon name="arrowUp" />
-            </button>
-            <button className="icon-btn" aria-label="Move down" disabled={i === slides.length - 1} onClick={() => move(i, 1)}>
-              <Icon name="chev" />
-            </button>
-            <button className="icon-btn" aria-label="Remove slide" onClick={() => onChange(slides.filter((_, k) => k !== i))}>
-              <Icon name="trash" />
-            </button>
+            <label className="slide-notes-label">
+              <span className="field-label">Speaker notes</span>
+              <textarea
+                className="input slide-notes"
+                placeholder="Optional: what to say on this slide"
+                rows={2}
+                value={s.notes}
+                onChange={(e) => update(i, { notes: e.target.value })}
+              />
+            </label>
           </div>
         </section>
       ))}
@@ -518,16 +505,17 @@ function CompareDialog({ proposal, onClose, onAccept }) {
       <div className="scrim is-open" onClick={onClose} />
       <div className="modal modal-xwide" role="dialog" aria-modal="true" aria-labelledby="compare-title">
         <div className="modal-head">
-          <h2 id="compare-title">New draft of {proposal.label}</h2>
+          <h2 id="compare-title">{proposal.heading ? `${proposal.heading}: ${proposal.label}` : `New draft of ${proposal.label}`}</h2>
           <button className="icon-btn" aria-label="Close" onClick={onClose}>
             <Icon name="x" />
           </button>
         </div>
         <div className="modal-body">
           <p className="form-note" style={{ marginTop: 0 }}>
-            <span className="diff-key is-del">Removed</span> <span className="diff-key is-add">Added</span> Written from
-            the sources&apos; current versions. Using it replaces {proposal.label} in the editor; nothing is saved until you
-            press Save.
+            <span className="diff-key is-del">Removed</span> <span className="diff-key is-add">Added</span>{" "}
+            {proposal.note ??
+              `Written from the sources' current versions. Using it replaces ${proposal.label} in the editor.`}{" "}
+            Nothing is saved until you press Save.
           </p>
           {changed ? (
             <pre className="diff">
@@ -546,7 +534,7 @@ function CompareDialog({ proposal, onClose, onAccept }) {
               Keep mine
             </button>
             <button className="btn" disabled={!changed} onClick={onAccept}>
-              Use the new draft
+              {proposal.heading ? "Apply the change" : "Use the new draft"}
             </button>
           </div>
         </div>
@@ -595,8 +583,7 @@ function PublishDialog({ token, note, workspace, classrooms, onClose, onPublishe
         </div>
         <div className="modal-body">
           <p className="form-note" style={{ marginTop: 0 }}>
-            It becomes a doc in {personal ? "your workspace" : workspace.name}
-            {note.kind === "slides" ? " (a .pptx)" : ""} that Ask can answer from.
+            It becomes a doc in {personal ? "your workspace" : workspace.name} (a .pptx) that Ask can answer from.
             {note.document_id && " The published copy is replaced and its readers get an update notice."}
           </p>
           {personal ? (
@@ -648,6 +635,100 @@ function PublishDialog({ token, note, workspace, classrooms, onClose, onPublishe
             </button>
           </div>
         </div>
+      </div>
+    </>
+  );
+}
+
+// Quick starts; anything else, the faculty member types.
+const SUGGESTIONS = [
+  ["More detailed", "Make the deck more detailed: split slides that cover several ideas and add worked examples"],
+  ["Shorter", "Make the deck shorter: merge related slides and keep only the key points"],
+];
+
+/**
+ * "Edit with AI": the faculty member says what to change ("add a slide on
+ * TLBs", "remove slide 4") and the model applies it to the deck from its
+ * sources. `onSubmit(text)` resolves to an error message, or null once the
+ * comparison is up.
+ */
+function ReviseDialog({ slideCount, onClose, onSubmit }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === "Escape" && !busy) onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
+
+  async function submit(e) {
+    e?.preventDefault();
+    if (!text.trim() || busy) return;
+    setBusy(true);
+    setError("");
+    const failed = await onSubmit(text.trim());
+    if (failed) {
+      setError(failed);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="scrim is-open" onClick={busy ? undefined : onClose} />
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="revise-title">
+        <div className="modal-head">
+          <h2 id="revise-title">Edit with AI</h2>
+          <button className="icon-btn" aria-label="Close" disabled={busy} onClick={onClose}>
+            <Icon name="x" />
+          </button>
+        </div>
+        <form className="modal-body" onSubmit={submit}>
+          <p className="form-note" style={{ marginTop: 0 }}>
+            Say what to change in this {slideCount}-slide deck. New content comes from its sources. You&apos;ll see the
+            change before anything is replaced.
+          </p>
+          <textarea
+            className="input revise-input"
+            rows={3}
+            autoFocus
+            disabled={busy}
+            aria-label="What to change"
+            placeholder="e.g. Add a slide on the TLB after paging, remove slide 7, or split the segmentation slide in two"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
+            }}
+          />
+          <div className="revise-chips" role="group" aria-label="Quick starts">
+            {SUGGESTIONS.map(([label, request]) => (
+              <button
+                key={label}
+                type="button"
+                className="topic-chip"
+                aria-pressed={text === request}
+                disabled={busy}
+                onClick={() => setText(request)}
+              >
+                {label}
+              </button>
+            ))}
+            <span className="revise-or">or type your own change above</span>
+          </div>
+          {busy && <Loading label="Planning the change, then writing the slides. Big changes can take a minute or two" compact />}
+          {error && <p className="form-error">{error}</p>}
+          <div className="modal-foot">
+            <span className="revise-hint">Ctrl + Enter to apply</span>
+            <button className="btn" type="submit" disabled={busy || !text.trim()}>
+              <Icon name="sparkle" /> {busy ? "Working..." : "Make the change"}
+            </button>
+          </div>
+        </form>
       </div>
     </>
   );

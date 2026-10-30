@@ -1,14 +1,17 @@
+import Loading from "../ui/Loading";
+
 /**
  * Checkboxes for choosing source docs, grouped into this workspace's and
  * the institute library's. `docs` is null while loading. With `cite`, a
- * picked doc shows the number it's cited as.
+ * picked doc shows the number it's cited as. `empty` replaces the message
+ * shown when there are no docs.
  */
-export default function SourcePicker({ docs, picked, onChange, max, disabled, cite = false }) {
-  if (docs === null) return <p className="form-note">Loading docs...</p>;
+export default function SourcePicker({ docs, picked, onChange, max, disabled, cite = false, empty }) {
+  if (docs === null) return <Loading label="Loading docs" compact />;
   if (docs.length === 0) {
     return (
       <p className="note-box">
-        There are no ready docs here or in the institute library yet. Upload some in the Docs tab first.
+        {empty ?? "There are no ready docs here or in the institute library yet. Upload some in the Docs tab first."}
       </p>
     );
   }

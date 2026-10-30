@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ApiError, joinClassroom, leaveClassroom } from "../api/client";
 import Icon from "../ui/Icons";
 import { WsMark } from "../ui/Shelf";
+import { confirmDialog } from "../ui/confirm";
 
 /**
  * The topbar's shelf switcher: a button showing the current shelf, opening
@@ -115,7 +116,13 @@ export default function ScopeSwitcher({ auth, sections, selected, onSelect, onCh
  */
 function LeaveButton({ auth, classroom, onLeft }) {
   async function leave() {
-    if (!window.confirm(`Leave ${classroom.name}? You'll stop seeing its docs. You can rejoin with its code.`)) return;
+    const ok = await confirmDialog({
+      title: `Leave ${classroom.name}?`,
+      message: "You'll stop seeing its docs. You can rejoin with its code.",
+      confirmLabel: "Leave",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await leaveClassroom(auth.token, classroom.id);
       onLeft();

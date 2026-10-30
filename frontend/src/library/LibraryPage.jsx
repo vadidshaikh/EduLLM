@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { ApiError, listAllDocumentEvents, listClassrooms, listDocuments, uploadDocument } from "../api/client";
 import Icon from "../ui/Icons";
 import { ShelfGroup, Spine, WsMark } from "../ui/Shelf";
@@ -8,8 +9,10 @@ import { smoothly } from "../ui/transition";
 import ClassroomsPanel from "./ClassroomsPanel";
 import DocumentDrawer from "./DocumentDrawer";
 import MembersPanel from "./MembersPanel";
+import LibrarySide from "./LibrarySide";
 import NotesPanel from "./NotesPanel";
 import QuizzesPanel from "../quizzes/QuizzesPanel";
+import Loading from "../ui/Loading";
 
 const VIEW_KEY = "edullm_library_view";
 const RECENT_LIMIT = 8;
@@ -53,22 +56,30 @@ function accessText(doc, kind, classrooms) {
  * a list, what needs attention, recent changes, and for shared workspaces
  * its classrooms and faculty.
  */
-export default function LibraryPage({ auth, shelves, active = true, onNewWorkspace }) {
+export default function LibraryPage({ auth, shelves, switcher, active = true, onNewWorkspace }) {
   const option = shelves.option;
   if (!shelves.loaded) {
     return (
-      <main className="main">
-        <section className="library">
-          <p className="desk-empty">Fetching your library...</p>
-        </section>
-      </main>
+      <>
+        <LibrarySide switcher={switcher} />
+        <main className="main">
+          <section className="library">
+            <Loading label="Fetching your library" />
+          </section>
+        </main>
+      </>
     );
   }
   if (option.kind === "all") {
-    return <Overview auth={auth} shelves={shelves} active={active} onNewWorkspace={onNewWorkspace} />;
+    return (
+      <>
+        <LibrarySide switcher={switcher} />
+        <Overview auth={auth} shelves={shelves} active={active} onNewWorkspace={onNewWorkspace} />
+      </>
+    );
   }
   // Remount per place so per-place state (tab, drawer, filter) starts fresh.
-  return <Library key={option.id} auth={auth} shelves={shelves} option={option} active={active} />;
+  return <Library key={option.id} auth={auth} shelves={shelves} switcher={switcher} option={option} active={active} />;
 }
 
 /**
@@ -139,7 +150,7 @@ function Overview({ auth, shelves, active, onNewWorkspace }) {
   );
 }
 
-function Library({ auth, shelves, option, active }) {
+function Library({ auth, shelves, switcher, option, active }) {
   const workspace = option.workspace ?? null;
   const placeId = option.id === LIBRARY ? null : option.id;
   const kind = option.id === LIBRARY ? "library" : workspace.kind;
@@ -154,6 +165,9 @@ function Library({ auth, shelves, option, active }) {
   const [error, setError] = useState("");
   const [uploadNote, setUploadNote] = useState("");
   const [openDocId, setOpenDocId] = useState(null);
+  // A deck or quiz a link asked to open (see linkedItem below).
+  const [focus, setFocus] = useState(null);
+  const [searchParams, setSearchParams] = useSearchParams();
   const fileRef = useRef(null);
   const pendingUpload = useRef(null); // visibility for the next file pick
 
@@ -196,6 +210,24 @@ function Library({ auth, shelves, option, active }) {
     const id = setInterval(refresh, 2000);
     return () => clearInterval(id);
   }, [documents, refresh, active]);
+
+  // /library?ws=<this place>&deck=<note id>, or &quiz=<assessment id>&class=<classroom id>:
+  // open that tab and item, then drop the params so a reload doesn't reopen it.
+  const linkedWs = searchParams.get("ws");
+  useEffect(() => {
+    if (!active || !linkedWs || linkedWs !== placeId) return;
+    const deck = searchParams.get("deck");
+    const quiz = searchParams.get("quiz");
+    if (deck) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- opening what a link points at
+      setSection("notes");
+      setFocus({ deck });
+    } else if (quiz && kind === "shared") {
+      setSection("quizzes");
+      setFocus({ quiz, classroomId: searchParams.get("class") });
+    }
+    setSearchParams({}, { replace: true });
+  }, [active, linkedWs, placeId, kind, searchParams, setSearchParams]);
 
   function chooseView(next) {
     localStorage.setItem(VIEW_KEY, next);
@@ -263,231 +295,230 @@ function Library({ auth, shelves, option, active }) {
           ? `Shared with ${workspace.member_count} faculty. Publish docs to ${activeClassrooms.map((c) => c.name).join(" or ")} so students can ask about them.`
           : `Shared with ${workspace.member_count} faculty. Create a classroom to publish docs to students.`;
 
+  const sections =
+    kind === "library" ? [] : kind === "shared" ? ["books", "notes", "quizzes", "classrooms", "faculty"] : ["books", "notes"];
+
   return (
-    <main className="main">
-      <section className="library">
-        <div className="lib-inner">
-          <div className="lib-head">
-            <div>
-              <h1>{title}</h1>
-              <p>{sub}</p>
-            </div>
-            {section === "books" && (
-              <div className="counts">
-                <div>
-                  <b>{counts.books}</b>
-                  <span>{counts.books === 1 ? "doc" : "docs"}</span>
-                </div>
-                {kind === "shared" && (
-                  <div>
-                    <b>{counts.published}</b>
-                    <span>published</span>
-                  </div>
-                )}
-                <div className="busy">
-                  <b>{counts.busy}</b>
-                  <span>indexing</span>
-                </div>
-                {counts.bad > 0 && (
-                  <div className="bad">
-                    <b>{counts.bad}</b>
-                    <span>failed</span>
-                  </div>
-                )}
+    <>
+      <LibrarySide
+        switcher={switcher}
+        sections={sections}
+        section={section}
+        onSection={(id) => smoothly(() => setSection(id))}
+      />
+      <main className="main">
+        <section className="library">
+          <div className="lib-inner">
+            <div className="lib-head">
+              <div>
+                <h1>{title}</h1>
+                <p>{sub}</p>
               </div>
-            )}
-          </div>
-
-          {kind !== "library" && (
-            <nav className="nav lib-tabs" aria-label="Workspace">
-              {[
-                ["books", "Docs"],
-                ["notes", "Notes & slides"],
-                ...(kind === "shared"
-                  ? [
-                      ["quizzes", "Quizzes"],
-                      ["classrooms", "Classrooms"],
-                      ["faculty", "Faculty"],
-                    ]
-                  : []),
-              ].map(([id, label]) => (
-                <button key={id} aria-current={section === id ? "page" : undefined} onClick={() => id !== section && smoothly(() => setSection(id))}>
-                  {label}
-                </button>
-              ))}
-            </nav>
-          )}
-
-          {section === "books" && (
-            <>
-              <div className="lib-tools">
-                {canShelf && (
-                  <div className="seg" role="group" aria-label="View">
-                    <button aria-pressed={view === "shelf"} onClick={() => chooseView("shelf")}>
-                      Shelves
-                    </button>
-                    <button aria-pressed={view === "list"} onClick={() => chooseView("list")}>
-                      List
-                    </button>
+              {section === "books" && (
+                <div className="counts">
+                  <div>
+                    <b>{counts.books}</b>
+                    <span>{counts.books === 1 ? "doc" : "docs"}</span>
                   </div>
-                )}
-                <label className="search">
-                  <Icon name="search" />
-                  <span className="sr">Filter documents</span>
-                  <input placeholder="Filter by title" value={filter} onChange={(e) => setFilter(e.target.value)} />
-                </label>
-                {shownView === "list" ? (
-                  <div className="list-upload">
-                    {kind === "library" && (
-                      <select
-                        className="input"
-                        aria-label="Who can read uploaded docs"
-                        value={listUpload}
-                        onChange={(e) => setListUpload(e.target.value)}
-                      >
-                        <option value="faculty">Faculty only</option>
-                        <option value="institute">Everyone (students too)</option>
-                      </select>
-                    )}
-                    <button
-                      className="btn"
-                      title={
-                        kind === "shared"
-                          ? "Uploads as not published; publish to classrooms from the doc's drawer"
-                          : "Upload docs, or drop files on the list"
-                      }
-                      onClick={() => pickFiles(listUpload)}
-                    >
-                      <Icon name="upload" /> Upload docs
-                    </button>
+                  {kind === "shared" && (
+                    <div>
+                      <b>{counts.published}</b>
+                      <span>published</span>
+                    </div>
+                  )}
+                  <div className="busy">
+                    <b>{counts.busy}</b>
+                    <span>indexing</span>
                   </div>
-                ) : (
-                <div className="legend">
-                  <span>
-                    <i style={{ background: "transparent", boxShadow: "inset 0 0 0 2px var(--accent)" }} />
-                    Indexing
-                  </span>
-                  <span>
-                    <i style={{ background: "var(--danger)" }} />
-                    Failed
-                  </span>
-                  {kind !== "personal" && (
-                    <span>
-                      <Icon name="lock" className="legend-lock" />
-                      Not published to a classroom
-                    </span>
+                  {counts.bad > 0 && (
+                    <div className="bad">
+                      <b>{counts.bad}</b>
+                      <span>failed</span>
+                    </div>
                   )}
                 </div>
-                )}
-              </div>
-              {uploadNote && <p className="form-note lib-note">{uploadNote}</p>}
-              {error && <p className="form-error lib-note">{error}</p>}
-
-              {documents === null && !error ? (
-                <p className="desk-empty">Loading docs...</p>
-              ) : shownView === "shelf" ? (
-                <div className="lib-shelves">
-                  <div className="shelf-wrap">
-                    {groups.map((g) => {
-                      const held = docs.filter(g.holds);
-                      if (!held.length && !g.upload) return null;
-                      return (
-                        <ShelfGroup key={g.key} label={g.label} tone={g.tone} count={held.length}>
-                          {held.map((d) => (
-                            <Spine
-                              key={d.id}
-                              as="button"
-                              doc={d}
-                              scale={1.05}
-                              locked={Boolean(g.locked)}
-                              dim={!match(d)}
-                              onClick={() => setOpenDocId(d.id)}
-                            />
-                          ))}
-                          {g.upload && <UploadSlot label={g.label} onPick={() => pickFiles(g.upload)} onDrop={(files) => upload(files, g.upload)} />}
-                        </ShelfGroup>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : (
-                <DocumentList
-                  docs={docs.filter(match)}
-                  total={docs.length}
-                  filter={filter.trim()}
-                  onClearFilter={() => setFilter("")}
-                  kind={kind}
-                  placeName={option.name}
-                  classrooms={classrooms}
-                  onOpen={setOpenDocId}
-                  onDrop={(files) => upload(files, listUpload)}
-                />
               )}
+            </div>
 
-              <div className="lib-lower">
-                <NeedsAttention docs={docs} onOpen={setOpenDocId} />
-                <RecentChanges events={events} docs={docs} onOpen={setOpenDocId} />
-              </div>
-              <input
-                ref={fileRef}
-                type="file"
-                multiple
-                hidden
-                onChange={(e) => {
-                  upload(Array.from(e.target.files ?? []), pendingUpload.current);
-                  e.target.value = "";
+            {section === "books" && (
+              <>
+                <div className="lib-tools">
+                  {canShelf && (
+                    <div className="seg" role="group" aria-label="View">
+                      <button aria-pressed={view === "shelf"} onClick={() => chooseView("shelf")}>
+                        Shelves
+                      </button>
+                      <button aria-pressed={view === "list"} onClick={() => chooseView("list")}>
+                        List
+                      </button>
+                    </div>
+                  )}
+                  <label className="search">
+                    <Icon name="search" />
+                    <span className="sr">Filter documents</span>
+                    <input placeholder="Filter by title" value={filter} onChange={(e) => setFilter(e.target.value)} />
+                  </label>
+                  {shownView === "list" ? (
+                    <div className="list-upload">
+                      {kind === "library" && (
+                        <select
+                          className="input"
+                          aria-label="Who can read uploaded docs"
+                          value={listUpload}
+                          onChange={(e) => setListUpload(e.target.value)}
+                        >
+                          <option value="faculty">Faculty only</option>
+                          <option value="institute">Everyone (students too)</option>
+                        </select>
+                      )}
+                      <button
+                        className="btn"
+                        title={
+                          kind === "shared"
+                            ? "Uploads as not published; publish to classrooms from the doc's drawer"
+                            : "Upload docs, or drop files on the list"
+                        }
+                        onClick={() => pickFiles(listUpload)}
+                      >
+                        <Icon name="upload" /> Upload docs
+                      </button>
+                    </div>
+                  ) : (
+                  <div className="legend">
+                    <span>
+                      <i style={{ background: "transparent", boxShadow: "inset 0 0 0 2px var(--accent)" }} />
+                      Indexing
+                    </span>
+                    <span>
+                      <i style={{ background: "var(--danger)" }} />
+                      Failed
+                    </span>
+                    {kind !== "personal" && (
+                      <span>
+                        <Icon name="lock" className="legend-lock" />
+                        Not published to a classroom
+                      </span>
+                    )}
+                  </div>
+                  )}
+                </div>
+                {uploadNote && <p className="form-note lib-note">{uploadNote}</p>}
+                {error && <p className="form-error lib-note">{error}</p>}
+
+                {documents === null && !error ? (
+                  <Loading label="Loading docs" />
+                ) : shownView === "shelf" ? (
+                  <div className="lib-shelves">
+                    <div className="shelf-wrap">
+                      {groups.map((g) => {
+                        const held = docs.filter(g.holds);
+                        if (!held.length && !g.upload) return null;
+                        return (
+                          <ShelfGroup key={g.key} label={g.label} tone={g.tone} count={held.length}>
+                            {held.map((d) => (
+                              <Spine
+                                key={d.id}
+                                as="button"
+                                doc={d}
+                                scale={1.05}
+                                locked={Boolean(g.locked)}
+                                dim={!match(d)}
+                                onClick={() => setOpenDocId(d.id)}
+                              />
+                            ))}
+                            {g.upload && <UploadSlot label={g.label} onPick={() => pickFiles(g.upload)} onDrop={(files) => upload(files, g.upload)} />}
+                          </ShelfGroup>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <DocumentList
+                    docs={docs.filter(match)}
+                    total={docs.length}
+                    filter={filter.trim()}
+                    onClearFilter={() => setFilter("")}
+                    kind={kind}
+                    placeName={option.name}
+                    classrooms={classrooms}
+                    onOpen={setOpenDocId}
+                    onDrop={(files) => upload(files, listUpload)}
+                  />
+                )}
+
+                <div className="lib-lower">
+                  <NeedsAttention docs={docs} onOpen={setOpenDocId} />
+                  <RecentChanges events={events} docs={docs} onOpen={setOpenDocId} />
+                </div>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  multiple
+                  hidden
+                  onChange={(e) => {
+                    upload(Array.from(e.target.files ?? []), pendingUpload.current);
+                    e.target.value = "";
+                  }}
+                />
+              </>
+            )}
+
+            {section === "notes" && (
+              <NotesPanel
+                token={auth.token}
+                workspace={workspace}
+                classrooms={classrooms}
+                onDocsChanged={refresh}
+                focus={focus?.deck ? focus : null}
+              />
+            )}
+
+            {section === "quizzes" && (
+              <QuizzesPanel token={auth.token} workspace={workspace} classrooms={classrooms} focus={focus?.quiz ? focus : null} />
+            )}
+
+            {section === "classrooms" && (
+              <ClassroomsPanel
+                token={auth.token}
+                workspaceId={placeId}
+                classrooms={classrooms}
+                onChanged={() => {
+                  refreshClassrooms();
+                  shelves.reload();
                 }}
               />
-            </>
-          )}
+            )}
 
-          {section === "notes" && (
-            <NotesPanel token={auth.token} workspace={workspace} classrooms={classrooms} onDocsChanged={refresh} />
-          )}
+            {section === "faculty" && (
+              <MembersPanel
+                token={auth.token}
+                workspace={workspace}
+                me={auth.sub}
+                onChanged={shelves.reload}
+                onGone={async () => {
+                  await shelves.reload();
+                  shelves.setScope(null);
+                }}
+              />
+            )}
+          </div>
+        </section>
 
-          {section === "quizzes" && <QuizzesPanel token={auth.token} workspace={workspace} classrooms={classrooms} />}
-
-          {section === "classrooms" && (
-            <ClassroomsPanel
-              token={auth.token}
-              workspaceId={placeId}
-              classrooms={classrooms}
-              onChanged={() => {
-                refreshClassrooms();
-                shelves.reload();
-              }}
-            />
-          )}
-
-          {section === "faculty" && (
-            <MembersPanel
-              token={auth.token}
-              workspace={workspace}
-              me={auth.sub}
-              onChanged={shelves.reload}
-              onGone={async () => {
-                await shelves.reload();
-                shelves.setScope(null);
-              }}
-            />
-          )}
-        </div>
-      </section>
-
-      {openDoc && (
-        <DocumentDrawer
-          token={auth.token}
-          doc={openDoc}
-          place={place}
-          onClose={() => setOpenDocId(null)}
-          onChanged={refresh}
-          onRemoved={() => {
-            setOpenDocId(null);
-            refresh();
-          }}
-        />
-      )}
-    </main>
+        {openDoc && (
+          <DocumentDrawer
+            token={auth.token}
+            doc={openDoc}
+            place={place}
+            onClose={() => setOpenDocId(null)}
+            onChanged={refresh}
+            onRemoved={() => {
+              setOpenDocId(null);
+              refresh();
+            }}
+          />
+        )}
+      </main>
+    </>
   );
 }
 

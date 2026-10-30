@@ -8,6 +8,10 @@ import {
   removeClassroomStudent,
   updateClassroom,
 } from "../api/client";
+import Icon from "../ui/Icons";
+import { nameFromEmail, toneColor } from "../ui/spines";
+import { confirmDialog } from "../ui/confirm";
+import Loading from "../ui/Loading";
 
 /**
  * Turns a caught error into a message to show.
@@ -129,6 +133,29 @@ function ClassroomRow({ token, classroom: c, open, onToggleOpen, onRun, onChange
     }
   }
 
+  async function toggleArchived() {
+    const ok = await confirmDialog(
+      archived
+        ? { title: `Restore "${c.name}"?`, message: "Its students get access to its documents again.", confirmLabel: "Restore" }
+        : {
+            title: `Archive "${c.name}"?`,
+            message: "Its students lose access to its documents and quizzes until it's restored.",
+            confirmLabel: "Archive",
+            danger: true,
+          }
+    );
+    if (ok) onRun(() => updateClassroom(token, c.id, { archived: !archived }), "Couldn't update the classroom.");
+  }
+
+  async function newCode() {
+    const ok = await confirmDialog({
+      title: "Replace the join code?",
+      message: `The current code for "${c.name}" stops working. Students already in stay in.`,
+      confirmLabel: "New code",
+    });
+    if (ok) onRun(() => regenerateJoinCode(token, c.id), "Couldn't change the code.");
+  }
+
   function saveEdit() {
     if (!editing.name.trim()) return;
     onRun(() => updateClassroom(token, c.id, editing), "Couldn't save the classroom.");
@@ -158,10 +185,10 @@ function ClassroomRow({ token, classroom: c, open, onToggleOpen, onRun, onChange
               value={editing.term}
               onChange={(e) => setEditing({ ...editing, term: e.target.value })}
             />
-            <button className="link" onClick={saveEdit}>
+            <button className="btn btn-sm" onClick={saveEdit} disabled={!editing.name.trim()}>
               Save
             </button>
-            <button className="link" onClick={() => setEditing(null)}>
+            <button className="btn btn-ghost btn-sm" onClick={() => setEditing(null)}>
               Cancel
             </button>
           </div>
@@ -172,57 +199,51 @@ function ClassroomRow({ token, classroom: c, open, onToggleOpen, onRun, onChange
               {archived && <span className="tag-pill">archived</span>}
             </div>
             <div className="classroom-meta">
-              {[c.subject, c.term].filter(Boolean).join(" · ") || "No subject or term"} ·{" "}
-              {c.student_count} student{c.student_count === 1 ? "" : "s"}
+              {[c.subject, c.term].filter(Boolean).join(" · ") || "No subject or term"}
             </div>
           </div>
         )}
         {!editing && (
           <div className="classroom-actions">
             {!archived && (
-              <span className="join-code" title="Join code">
-                {c.join_code}
+              <span className="code-chip">
+                <span className="join-code" title="Join code">
+                  {c.join_code}
+                </span>
+                <button className="icon-btn" title={copied ? "Copied" : "Copy join code"} aria-label="Copy join code" onClick={copyCode}>
+                  <Icon name={copied ? "check" : "copy"} />
+                </button>
+                <button
+                  className="icon-btn"
+                  title="New join code"
+                  aria-label="New join code"
+                  onClick={newCode}
+                >
+                  <Icon name="refresh" />
+                </button>
               </span>
             )}
-            {!archived && (
-              <button className="link" onClick={copyCode}>
-                {copied ? "Copied" : "Copy"}
-              </button>
-            )}
-            {!archived && (
-              <button
-                className="link"
-                onClick={() => {
-                  if (window.confirm(`Replace the join code for "${c.name}"? The current code will stop working.`)) {
-                    onRun(() => regenerateJoinCode(token, c.id), "Couldn't change the code.");
-                  }
-                }}
-              >
-                New code
-              </button>
-            )}
-            <button className="link" onClick={onToggleOpen}>
-              {open ? "Hide students" : "Students"}
+            <button className="btn btn-ghost btn-sm" aria-expanded={open} onClick={onToggleOpen}>
+              <Icon name="people" /> {c.student_count} student{c.student_count === 1 ? "" : "s"}
+              <Icon name="chev" className={open ? "chev-up" : undefined} />
             </button>
             <button
-              className="link"
+              className="icon-btn"
+              title="Edit name, subject, term"
+              aria-label={`Edit ${c.name}`}
               onClick={() => setEditing({ name: c.name, subject: c.subject ?? "", term: c.term ?? "" })}
             >
-              Edit
+              <Icon name="pen" />
             </button>
-            <button
-              className="link"
-              onClick={() => {
-                const prompt = archived
-                  ? `Restore "${c.name}"? Its students get access to its documents again.`
-                  : `Archive "${c.name}"? Its students lose access to its documents until it's restored.`;
-                if (window.confirm(prompt)) {
-                  onRun(() => updateClassroom(token, c.id, { archived: !archived }), "Couldn't update the classroom.");
-                }
-              }}
-            >
-              {archived ? "Restore" : "Archive"}
-            </button>
+            {archived ? (
+              <button className="btn btn-ghost btn-sm" onClick={toggleArchived}>
+                Restore
+              </button>
+            ) : (
+              <button className="icon-btn" title="Archive" aria-label={`Archive ${c.name}`} onClick={toggleArchived}>
+                <Icon name="archive" />
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -241,6 +262,8 @@ function StudentsList({ token, classroomId, onChanged }) {
   const [pasted, setPasted] = useState("");
   const [result, setResult] = useState("");
   const [adding, setAdding] = useState(false);
+  const [adderShown, setAdderShown] = useState(false); // the paste box, once there are students
+  const [query, setQuery] = useState("");
 
   const load = useCallback(() => {
     listClassroomStudents(token, classroomId)
@@ -267,6 +290,7 @@ function StudentsList({ token, classroomId, onChanged }) {
       if (r.rejected.length) parts.push(`not student emails: ${r.rejected.join(", ")}`);
       setResult(parts.join(" · "));
       setPasted("");
+      setAdderShown(false);
       load();
       onChanged();
     } catch (err) {
@@ -277,7 +301,13 @@ function StudentsList({ token, classroomId, onChanged }) {
   }
 
   async function handleRemove(email) {
-    if (!window.confirm(`Remove ${email} from this classroom?`)) return;
+    const ok = await confirmDialog({
+      title: "Remove this student?",
+      message: `${email} loses access to this classroom's documents and quizzes.`,
+      confirmLabel: "Remove",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await removeClassroomStudent(token, classroomId, email);
       load();
@@ -287,34 +317,97 @@ function StudentsList({ token, classroomId, onChanged }) {
     }
   }
 
+  const joined = students?.filter((x) => !x.added_by).length ?? 0;
+  const pending = students?.filter((x) => !x.name).length ?? 0;
+  const q = query.trim().toLowerCase();
+  const shown = students?.filter((x) => !q || x.email.includes(q) || x.name?.toLowerCase().includes(q)) ?? [];
+  const adderOpen = adderShown || students?.length === 0;
+
   return (
     <div className="students-box">
-      <form className="students-add" onSubmit={handleAdd}>
-        <textarea
-          className="input"
-          rows={3}
-          placeholder="Paste student emails: one per line, comma-separated, or a CSV"
-          value={pasted}
-          onChange={(e) => setPasted(e.target.value)}
-        />
-        <button className="btn btn-ghost" type="submit" disabled={adding || !pasted.trim()}>
-          {adding ? "Adding..." : "Add students"}
-        </button>
-      </form>
+      <div className="students-head">
+        <div className="students-stats">
+          {students !== null && (
+            <>
+              <b>
+                {students.length} student{students.length === 1 ? "" : "s"}
+              </b>
+              {students.length > 0 && (
+                <>
+                  <span className="stat-chip">
+                    <Icon name="userPlus" /> {students.length - joined} added
+                  </span>
+                  <span className="stat-chip">
+                    <Icon name="key" /> {joined} joined with code
+                  </span>
+                  {pending > 0 && <span className="stat-chip is-pending">{pending} not signed in yet</span>}
+                </>
+              )}
+            </>
+          )}
+        </div>
+        <div className="students-tools">
+          {students?.length > 8 && (
+            <label className="students-search">
+              <Icon name="search" />
+              <input placeholder="Find a student" value={query} onChange={(e) => setQuery(e.target.value)} />
+            </label>
+          )}
+          {students?.length > 0 && (
+            <button className="btn btn-ghost btn-sm" aria-expanded={adderOpen} onClick={() => setAdderShown(!adderShown)}>
+              <Icon name="userPlus" /> Add by email
+            </button>
+          )}
+        </div>
+      </div>
+
+      {adderOpen && (
+        <form className="students-add" onSubmit={handleAdd}>
+          <textarea
+            className="input"
+            rows={3}
+            autoFocus={students?.length > 0}
+            placeholder={"Paste student emails: one per line, comma-separated, or a CSV\ne.g. aarav.co23d1@scet.ac.in"}
+            value={pasted}
+            onChange={(e) => setPasted(e.target.value)}
+          />
+          <button className="btn" type="submit" disabled={adding || !pasted.trim()}>
+            <Icon name="plus" /> {adding ? "Adding..." : "Add students"}
+          </button>
+        </form>
+      )}
       {result && <div className="form-note">{result}</div>}
       {error && <div className="form-error">{error}</div>}
-      {students === null && !error && <p className="form-note">Loading students...</p>}
-      {students?.length === 0 && <p className="form-note">No students yet. Share the join code, or add them above.</p>}
-      {students?.length > 0 && (
-        <ul className="people-list">
-          {students.map((s) => (
-            <li key={s.email}>
-              <span>
-                {s.name ?? <span className="who">Not signed in yet</span>} <span className="who">{s.email}</span>
+      {students === null && !error && <Loading label="Loading students" compact />}
+      {students?.length === 0 && (
+        <p className="form-note">No students yet. Share the join code, or paste their emails above.</p>
+      )}
+      {students?.length > 0 && shown.length === 0 && <p className="form-note">No one matches &ldquo;{query}&rdquo;.</p>}
+      {shown.length > 0 && (
+        <ul className="person-cards">
+          {shown.map((x) => (
+            <li key={x.email} className="person-card" style={{ "--c": toneColor(x.email) }}>
+              <span className="person-avatar" aria-hidden="true">
+                {(x.name ?? nameFromEmail(x.email))[0]?.toUpperCase()}
               </span>
-              <span className="who">{s.added_by ? "added by faculty" : "joined with code"}</span>
-              <button className="link" onClick={() => handleRemove(s.email)}>
-                Remove
+              <span className="person-who">
+                <b className={x.name ? undefined : "is-pending"}>{x.name ?? "Not signed in yet"}</b>
+                <small title={x.email}>{x.email}</small>
+              </span>
+              <span
+                className="person-how"
+                title={x.added_by ? `Added by ${x.added_by}` : "Joined with the class code"}
+                aria-label={x.added_by ? "Added by faculty" : "Joined with code"}
+              >
+                <Icon name={x.added_by ? "userPlus" : "key"} />
+              </span>
+              <button
+                className="icon-btn person-remove"
+                title="Remove from classroom"
+                aria-label={`Remove ${x.email}`}
+                onClick={() => handleRemove(x.email)}
+              >
+                <Icon name="x" />
               </button>
             </li>
           ))}

@@ -416,3 +416,35 @@ CREATE UNIQUE INDEX IF NOT EXISTS assessment_items_position_idx
 CREATE INDEX IF NOT EXISTS assessment_items_student_idx ON assessment_items (student_email, assessment_id);
 
 CREATE INDEX IF NOT EXISTS assessment_items_question_id_idx ON assessment_items (question_id);
+
+-- Phase 5: answering. A student's answers to one quiz or assignment, graded
+-- when they submit (multiple choice only for now). One submission each, no
+-- resubmitting. `answers` = [{"question_id", "choice"}], `choice` being an
+-- index into the question's body.options (not the shuffled order shown), or
+-- null when left blank, so a later edit to a question can be regraded.
+CREATE TABLE IF NOT EXISTS submissions (
+    assessment_id UUID NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+    student_email TEXT NOT NULL,
+    answers JSONB NOT NULL,
+    score INT NOT NULL,
+    total INT NOT NULL,
+    submitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (assessment_id, student_email)
+);
+
+CREATE INDEX IF NOT EXISTS submissions_student_email_idx ON submissions (student_email);
+
+-- Assignments are written answers checked on paper: a submission only
+-- records that it was handed in (score and total stay null). `marked_by`
+-- is the faculty member who ticked it off, null when the student did.
+ALTER TABLE submissions
+    ALTER COLUMN score DROP NOT NULL,
+    ALTER COLUMN total DROP NOT NULL,
+    ADD COLUMN IF NOT EXISTS marked_by TEXT;
+
+-- Assignments are handed in as a PDF of the written answers (scanned or
+-- typed). Null for quizzes and for paper copies ticked off by faculty.
+ALTER TABLE submissions
+    ADD COLUMN IF NOT EXISTS file_path TEXT,
+    ADD COLUMN IF NOT EXISTS file_name TEXT,
+    ADD COLUMN IF NOT EXISTS file_size INT;
