@@ -30,12 +30,13 @@ export default function ItemList({ items, showMeta = false, picks, pickLabel = "
               <ul className={`q-options${onPick ? " is-answering" : ""}`} role={onPick ? "radiogroup" : undefined}>
                 {item.options.map((option, i) => {
                   const classes = [];
-                  if (known && item.correct === i) classes.push("is-correct");
                   if (picked === i) {
                     // Before the answer key is out, a student's set still says whether each pick was right.
+                    const right = known ? item.correct === i : item.is_right === true;
                     const wrong = known ? item.correct !== i : item.is_right === false;
-                    const right = !known && item.is_right === true;
-                    classes.push(wrong ? "is-wrong" : right ? "is-correct" : "is-picked");
+                    classes.push(right ? "is-correct" : wrong ? "is-wrong" : "is-picked");
+                  } else if (known && item.correct === i) {
+                    classes.push("is-correct");
                   }
                   const body = (
                     <>
