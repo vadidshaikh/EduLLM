@@ -15,9 +15,10 @@ import numpy as np
 from langsmith import traceable
 
 from app.assessments.prompts import QUESTIONS_PROMPT
-from app.authoring.generate import GenerationError, ask, parse_json
+from app.authoring.generate import GenerationError, ask
 from app.db import queries
 from app.ingestion.embedder import embed_texts
+from app.llm_json import parse_json
 
 logger = logging.getLogger(__name__)
 

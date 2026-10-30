@@ -23,6 +23,7 @@ from langsmith import traceable
 from app.authoring.prompts import OUTLINE_PROMPT, REVISION_PLAN_PROMPT, WRITE_SLIDES_PROMPT
 from app.db import queries
 from app.ingestion.embedder import embed_texts
+from app.llm_json import parse_json
 from app.rag.llm import MODEL_UNAVAILABLE_REPLY, stream_llm
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,6 @@ _BATCH = 4
 _PARALLEL = 4
 
 _FENCE = re.compile(r"^```[a-zA-Z]*\n(.*)\n```$", re.DOTALL)
-_JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
 
 
 class GenerationError(Exception):
@@ -76,20 +76,6 @@ def _context(claims: dict, query: str, sources: list[dict]) -> str:
         if texts:
             blocks.append(f"[{number}] {source['title']}\n\n" + "\n\n---\n\n".join(texts))
     return "\n\n=====\n\n".join(blocks)
-
-
-def parse_json(raw: str) -> object:
-    """The model's JSON reply, or the first {...} in it if it added text
-    around it; None if neither parses.
-    """
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        match = _JSON_OBJECT.search(raw)
-        try:
-            return json.loads(match.group(0)) if match else None
-        except json.JSONDecodeError:
-            return None
 
 
 def _brief(title: str, topic: str, subject: str | None, instructions: str | None) -> str:

@@ -4,7 +4,7 @@ RAG over institute documents, with access scoped by workspaces and classrooms: r
 
 ## Features
 
-**Everyone**
+### Everyone
 - Sign in with a magic link sent to your institute email; faculty or student is worked out from the address.
 - Ask questions about your documents in a chat; answers stream in with their sources, and a chart when you ask for numbers.
 - Search everything you can read, or just one workspace / classroom (pick it from the switcher or type `@name`).
@@ -12,29 +12,36 @@ RAG over institute documents, with access scoped by workspaces and classrooms: r
 - Get a notice when a document you can read is updated or removed.
 - Light and dark themes.
 
-**Faculty**
+### Faculty: library and classrooms
 - Institute library (for everyone or faculty only), a personal workspace, and shared workspaces with other faculty.
 - Upload PDFs and other docs; they are indexed automatically with a progress bar. Rename, change access, remove, see history.
 - Classrooms inside a shared workspace: join codes, add students by email/CSV, archive and restore.
 - Publish documents to chosen classrooms; students only ever see what is published to them.
-- Slide decks: the AI drafts a `.pptx` lecture deck from chosen docs; edit it, ask for changes in words, redraft when sources change, download or publish.
-- Question bank: AI-written or hand-written questions (MCQ, short, long), reviewed and approved before use; near-duplicates are dropped.
-- Quizzes where every student gets a different set, and assignments that never repeat questions across classrooms in a term.
-- `/ppt` and `/quiz` in the chat composer make a deck or a full classroom quiz in one go.
-- Results: quiz scores, who handed in assignments (PDF or ticked off for paper copies), and class analytics — averages, completion, weakest chapters, hardest questions.
 
-**Students**
+<img src="mds/screenshots/library.png" alt="Institute library" width="720">
+
+### Faculty: slide decks
+- The AI drafts a `.pptx` lecture deck from chosen docs, citing them.
+- Edit it, ask for changes in words ("add a slide on paging"), redraft when sources change, download or publish.
+- Type `/ppt` in the chat box to start one.
+
+### Faculty: question bank and quizzes
+- AI-written or hand-written questions (MCQ, short, long), reviewed and approved before use; near-duplicates are dropped.
+
+<img src="mds/screenshots/question-bank.png" alt="Question bank" width="720">
+
+- Quizzes where every student gets a different set, and assignments that never repeat questions across classrooms in a term.
+- Type `/quiz` in the chat box to write questions and give a classroom a quiz in one go.
+- Results: quiz scores, who handed in assignments (PDF, or ticked off for paper copies), and class analytics — averages, completion, weakest chapters, hardest questions.
+
+<img src="mds/screenshots/quiz-sets.png" alt="A quiz, one set per student" width="720">
+
+### Students
 - Join a classroom with its code; read its docs as a shelf or a list, PDFs open in the built-in viewer.
 - Take quizzes in the app (graded on submit; answers shown after the due date).
-- Hand in assignments as a PDF, late hand-ins allowed and marked late.
+- Hand in assignments as a PDF; late hand-ins are allowed and marked late.
 
-## Screenshots
-
-| | |
-|---|---|
-| ![Library](mds/screenshots/library.png) Library | ![Notes editor](mds/screenshots/notes-editor.png) Notes editor |
-| ![Question bank](mds/screenshots/question-bank.png) Question bank | ![Quiz sets](mds/screenshots/quiz-sets.png) A quiz, one set per student |
-| ![Student view](mds/screenshots/student-quiz.png) Student's own quiz (no answers) | |
+<img src="mds/screenshots/student-quiz.png" alt="A student's own quiz set, without answers" width="720">
 
 ## Quick Start
 

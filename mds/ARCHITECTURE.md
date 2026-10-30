@@ -217,7 +217,7 @@ one row per student per assessment.
 
 ```
 backend/app/
-  main.py, config.py, storage.py, tracing.py
+  main.py, config.py, storage.py, tracing.py, llm_json.py (JSON from model replies, repairs swapped brackets)
   db/        pool.py, queries.py (all SQL + access control)
   auth/      email_rules.py, jwt.py, magic_link.py, mailer.py, dependencies.py
   ingestion/ parser.py, splitter.py, embedder.py, pipeline.py
