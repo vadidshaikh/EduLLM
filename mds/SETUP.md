@@ -20,7 +20,15 @@ pip install -r requirements.txt
 # 3. Database
 docker compose up -d postgres
 python backend/scripts/init_db.py
+
+# 4. Frontend packages
+cd frontend && npm install && cd ..
+
+# 5. Optional: test accounts, docs, decks and quizzes (WIPES the database)
+cd backend && python scripts/seed_dev_data.py && cd ..
 ```
+
+What the seed creates and which accounts to try: [SEED_DATA.md](SEED_DATA.md).
 
 Generate a `JWT_SECRET` with:
 `python -c "import secrets; print(secrets.token_urlsafe(32))"`

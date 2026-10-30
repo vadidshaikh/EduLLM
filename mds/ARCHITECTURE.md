@@ -114,6 +114,8 @@ Upload → save file → `documents` row (status `queued`) → background job: *
 - **Stale**: `queries._with_source_status` compares each source's stored version with the document's current one (or notes it
   was removed). `POST /notes/{id}/redraft` returns a proposal only (the whole deck);
   the editor shows a line diff and nothing is saved until Save. `mark_up_to_date` records the current versions.
+- **Revising**: `POST /notes/{id}/revise {slides, request}` applies a change asked for in words ("add a slide on paging",
+  "remove slide 4") to the deck as it is in the editor. Also a proposal only, like a redraft.
 - **Saving** is optimistic: `PATCH` carries the `updated_at` the editor loaded and gets 409 if someone saved since.
 - **Publishing** uploads the deck through the normal path (`insert_document` + `run_ingestion`) as a `.pptx` (`render.deck_pptx`: title slide, slides with speaker notes, sources slide; built-in
   design, or the template at `PPT_TEMPLATE_PATH`). `notes.document_id` links them; republishing replaces that document by id
@@ -144,6 +146,31 @@ Upload → save file → `documents` row (status `queued`) → background job: *
 - **Students** get only their own items (`student_email = me` or class-wide), only while in the (unarchived) classroom,
   with options in their order and **never** `answer`.
 
+## Answering and results (Phase 5)
+
+`submissions (assessment_id, student_email, answers, score, total, marked_by, file_path, file_name, file_size, submitted_at)`,
+one row per student per assessment.
+
+- **Quizzes** are answered in the app: `POST /my/assessments/{id}/submit` grades MCQs on the spot and saves once
+  (409 if already submitted, 422 after the due date). `answers[].choice` is an index into the question's *original*
+  options (not the shuffled order shown), so an edited question can be regraded. The student sees their picks and
+  mark right away, and the correct answers and explanations only once the due date has passed (or straight away
+  when there is none).
+- **Assignments** are written and checked on paper; a submission only records that it was handed in (score/total null).
+  Students upload a PDF (`POST /my/assessments/{id}/hand-in`, up to 20 MB, must start with `%PDF`, saved under
+  `storage/handins`, replaces an earlier one; late is allowed and flagged). Faculty can tick off a paper copy
+  (`PUT …/submissions/{email}`, `marked_by` = them) or undo it. Model answers are never shown to students.
+- **Analytics** (`GET /classrooms/{id}/analytics`) is computed in Python from the classroom's assessments: turnout and
+  average per assessment, each student's record (average, handed in, missed, late), accuracy per chapter (the source
+  doc of each question) and the five hardest questions (answered at least twice). Quiz marks only.
+
+## Ask composer shortcuts
+
+- `@` + part of a name (`chat/ScopeMention.jsx`) picks a workspace, classroom or library to search, same as the switcher.
+- `/` at the start of an empty message (faculty, `chat/SlashCommand.jsx`) lists commands instead of asking the chat:
+  `/ppt` opens the new-deck dialog; `/quiz` (`quizzes/QuickQuizDialog.jsx`) writes MCQs from chosen docs, approves
+  them into the workspace's bank and creates a classroom quiz from them, in one go.
+
 ## Tracing (LangSmith, optional)
 
 `app/tracing.py`:
@@ -169,16 +196,22 @@ Upload → save file → `documents` row (status `queued`) → background job: *
 | `GET /classrooms`, `POST /classrooms/join`, `DELETE /classrooms/{id}/membership` | Student: my classrooms, join by code, leave |
 | `GET /scopes` | What the chat can be narrowed to (workspaces or classrooms) |
 | `GET /documents?scope_id=` | Ready documents the caller can ask about (`id`, `title`), all or one workspace/classroom; any role |
+| `GET /documents/{id}/file` | The original file, inline (PDFs open in the viewer), for anyone who can read it |
 | `GET /workspaces/{id}/note-sources` | Docs a note there can be written from (the workspace's + institute library, indexed) |
-| `GET/POST /workspaces/{id}/notes` | List notes/decks (with stale status); create one, LLM-drafted unless `generate: false` |
+| `GET/POST /workspaces/{id}/notes` | List decks (with stale status); create one, LLM-drafted unless `generate: false` |
 | `GET/PATCH/DELETE /notes/{id}` | Open, save (409 if saved by someone else since; `mark_up_to_date`), delete |
-| `POST /notes/{id}/redraft` | New draft of the whole note/deck or one `## ` section, from the sources' current versions; saves nothing |
-| `POST /notes/{id}/publish`, `GET /notes/{id}/download` | Publish/republish as a workspace doc (`.md` / `.pptx`); download the file |
+| `POST /notes/{id}/redraft` | New draft of the whole deck from the sources' current versions; saves nothing |
+| `POST /notes/{id}/revise` | Apply a change asked for in words to the deck in the editor; saves nothing |
+| `POST /notes/{id}/publish`, `GET /notes/{id}/download` | Publish/republish as a workspace doc (`.pptx`); download the file |
 | `GET/POST /workspaces/{id}/questions`, `PATCH/DELETE /questions/{id}` | Question bank: list, write one (409 if a near-duplicate), edit/approve, delete (409 if used) |
 | `POST /workspaces/{id}/questions/generate`, `…/questions/status` | LLM drafts from sources (near-duplicates dropped); approve several at once |
 | `GET/POST /classrooms/{id}/assessments`, `POST …/assessments/check` | A classroom's quizzes/assignments; create; dry run (enough questions?) |
 | `GET/DELETE /assessments/{id}`, `POST /assessments/{id}/add-students` | Every set with answers; delete; sets for students who joined later |
-| `GET /my/assessments`, `GET /my/assessments/{id}` | Student: their quizzes/assignments and own questions, no answers |
+| `GET /classrooms/{id}/analytics` | Class results: per assessment, per student, per chapter, hardest questions |
+| `PUT/DELETE /assessments/{id}/submissions/{email}`, `GET …/file` | Tick off / undo a paper hand-in; view a handed-in PDF |
+| `GET /my/assessments`, `GET /my/assessments/{id}` | Student: their quizzes/assignments and own questions (answers only after submitting and the due date) |
+| `POST /my/assessments/{id}/submit` | Student: submit quiz answers (graded, once) |
+| `POST/GET /my/assessments/{id}/hand-in` | Student: upload / view their assignment PDF |
 
 ## Code map
 
@@ -197,8 +230,9 @@ backend/app/
 backend/db/schema.sql          documents, chunks, conversations, messages, login_tokens,
                                users, document_events, notifications, notification_reads,
                                workspaces, workspace_members, classrooms, classroom_members, notes,
-                               questions, assessments, assessment_items
-backend/scripts/               init_db.py, mint_dev_token.py, bulk_upload_docs.py
+                               questions, assessments, assessment_items, submissions
+backend/scripts/               init_db.py, mint_dev_token.py, bulk_upload_docs.py,
+                               seed_dev_data.py + seed_content.py (test data, see SEED_DATA.md)
 frontend/src/
   App.jsx    signed-out routes, and the app shell (topbar + Ask / Library views; both stay mounted,
              the inactive one is hidden, so switching keeps state; ui/transition.js animates switches)
@@ -206,14 +240,17 @@ frontend/src/
   auth/      useAuth.js, EmailLoginPage (+ LoginLayout), VerifyPage
   shell/     useShelves.js (workspaces/classrooms, what Ask searches, which library is open),
              ScopeSwitcher (shelf switcher; join a classroom / new workspace), Notices (bell)
-  chat/      ChatPage (Ask: shelf, thread, desk, composer), History, AnswerBlock, ChartBlock
+  chat/      ChatPage (Ask: shelf, thread, desk, composer), History, AnswerBlock, ChartBlock,
+             ScopeMention (@ shelf picker), SlashCommand (/ppt, /quiz)
   library/   LibraryPage (shelves/list, needs attention, recent changes, tabs), DocumentDrawer,
              ClassroomsPanel, MembersPanel, NotesPanel (Slides tab), NewNoteDialog,
-             NoteEditor (editor, redraft + compare, publish), noteState.js, SourcePicker
+             NoteEditor (editor, redraft / revise + compare, publish), noteState.js, SourcePicker,
+             LibrarySide, StudentDocs (student shelf / list of docs)
   quizzes/   QuizzesPanel (workspace "Quizzes" tab), QuestionBank, QuestionDialog, GenerateQuestionsDialog,
-             AssessmentsPanel, NewAssessmentDialog, AssessmentView, ItemList, MyAssessmentsPage (student "Quizzes")
+             AssessmentsPanel, NewAssessmentDialog, AssessmentView, ItemList, AnalyticsPanel, QuickQuizDialog (/quiz),
+             MyAssessmentsPage (student view: docs, quizzes, assignments; take / hand in)
   ui/        Shelf.jsx (Spine, ShelfGroup, WsMark, SpineTooltip), spines.js, Icons.jsx, Logo.jsx,
-             diff.js (line diff, note sections)
+             diff.js (line diff), PdfViewer + useDocViewer (open docs / hand-ins), ConfirmHost + confirm.js, Loading
   styles/    theme.css   (ThemeContext.jsx = light/dark toggle)
 ```
 
@@ -236,5 +273,6 @@ frontend/src/
   the docs that answer used (default: the latest answer). On narrow screens the desk is a strip above the thread.
 - Library (faculty): shelves grouped by who can read them, each with an upload slot that sets that access;
   list view; a drawer per book (rename, access/publish, history, remove); a "Slides" tab for every
-  workspace; classrooms and faculty tabs for shared workspaces.
+  workspace; Quizzes, classrooms and faculty tabs for shared workspaces.
+- Library (students): their docs as shelves or a list (PDFs open in the viewer), and their quizzes and assignments.
 - Fonts: Outfit (UI), Literata (answers), JetBrains Mono (join codes). Light and dark themes.
